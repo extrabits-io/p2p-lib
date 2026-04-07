@@ -12,7 +12,7 @@ use tracing::{info, info_span, warn, Instrument};
 use uuid::Uuid;
 
 use crate::auth::Authenticator;
-use crate::shared::{ClientMessage, Delimited, ServerMessage, CONTROL_PORT};
+use crate::shared::{ClientMessage, Delimited, ServerMessage};
 
 /// State structure for the server.
 pub struct Server {
@@ -30,18 +30,23 @@ pub struct Server {
 
     /// IP address where tunnels will listen on.
     bind_tunnels: IpAddr,
+
+    control_port: u16,
 }
 
 impl Server {
     /// Create a new server with a specified minimum port number.
     pub fn new(port_range: RangeInclusive<u16>, secret: Option<&str>) -> Self {
-        assert!(!port_range.is_empty(), "must provide at least one port");
+        assert!(!port_range.len() > 1, "must provide at least two ports");
+        let mut rng = port_range;
+        let control_port = rng.next().unwrap();
         Server {
-            port_range,
+            port_range: rng,
             conns: Arc::new(DashMap::new()),
             auth: secret.map(Authenticator::new),
             bind_addr: IpAddr::V4(Ipv4Addr::UNSPECIFIED),
             bind_tunnels: IpAddr::V4(Ipv4Addr::UNSPECIFIED),
+            control_port,
         }
     }
 
@@ -58,8 +63,11 @@ impl Server {
     /// Start the server, listening for new connections.
     pub async fn listen(self) -> Result<()> {
         let this = Arc::new(self);
-        let listener = TcpListener::bind((this.bind_addr, CONTROL_PORT)).await?;
-        info!(addr = ?this.bind_addr, "server listening");
+        let listener = TcpListener::bind((this.bind_addr, this.control_port)).await?;
+        info!(
+            "server listening at {}:{}",
+            &this.bind_addr, &this.control_port
+        );
 
         loop {
             let (stream, addr) = listener.accept().await?;

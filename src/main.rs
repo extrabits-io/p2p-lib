@@ -27,8 +27,8 @@ enum Command {
         #[clap(short, long, env = "BORE_SERVER")]
         to: String,
 
-        /// Optional port on the remote server to select.
-        #[clap(short, long, default_value_t = 0)]
+        /// Control port on the remote server.
+        #[clap(short, long, env = "BORE_PORT")]
         port: u16,
 
         /// Optional secret for authentication.
