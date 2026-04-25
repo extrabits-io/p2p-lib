@@ -32,16 +32,28 @@ pub struct Client {
 
 impl Client {
     /// Create a new client.
-    pub async fn new(
+    pub fn new(
         local_host: &str,
         local_port: u16,
         to: &str,
         control_port: u16,
         secret: Option<&str>,
-    ) -> Result<Self> {
-        let mut stream = Delimited::new(connect_with_timeout(to, control_port).await?);
+    ) -> Self {
         let auth = secret.map(Authenticator::new);
-        if let Some(auth) = &auth {
+        Client {
+            conn: None,
+            to: to.to_string(),
+            local_host: local_host.to_string(),
+            local_port,
+            control_port,
+            auth,
+        }
+    }
+
+    /// Connect to the server, authenticating if applicable and performing the initial handshake
+    pub async fn connect(&mut self) -> Result<()> {
+        let mut stream = Delimited::new(connect_with_timeout(&self.to, self.control_port).await?);
+        if let Some(auth) = &self.auth {
             auth.client_handshake(&mut stream).await?;
         }
 
@@ -56,16 +68,11 @@ impl Client {
             None => bail!("unexpected EOF"),
         };
         info!(remote_port, "connected to server");
-        info!("listening at {to}:{remote_port}");
+        info!("listening at {}:{}", self.to, remote_port);
 
-        Ok(Client {
-            conn: Some(stream),
-            to: to.to_string(),
-            local_host: local_host.to_string(),
-            local_port,
-            control_port,
-            auth,
-        })
+        self.conn = Some(stream);
+
+        Ok(())
     }
 
     /// Start the client, listening for new connections.
