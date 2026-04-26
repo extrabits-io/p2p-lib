@@ -50,12 +50,12 @@ impl Server {
         }
     }
 
-    /// Set the IP address where tunnels will listen on.
+    /// Set the IP address where the control server will bind to.
     pub fn set_bind_addr(&mut self, bind_addr: IpAddr) {
         self.bind_addr = bind_addr;
     }
 
-    /// Set the IP address where the control server will bind to.
+    /// Set the IP address where tunnels will listen on.
     pub fn set_bind_tunnels(&mut self, bind_tunnels: IpAddr) {
         self.bind_tunnels = bind_tunnels;
     }
