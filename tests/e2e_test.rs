@@ -2,7 +2,8 @@ use std::net::SocketAddr;
 use std::time::Duration;
 
 use anyhow::{anyhow, Result};
-use bore_cli::{client::Client, server::Server, shared::CONTROL_PORT};
+use bore_cli::shared::Delimited;
+use bore_cli::{client::Client, server::Server};
 use lazy_static::lazy_static;
 use rstest::*;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -22,13 +23,15 @@ async fn spawn_server(secret: Option<&str>) {
 }
 
 /// Spawns a client with randomly assigned ports, returning the listener and remote address.
-async fn spawn_client(secret: Option<&str>) -> Result<(TcpListener, SocketAddr)> {
+async fn spawn_client(
+    secret: Option<&str>,
+) -> Result<(Client, Delimited<TcpStream>, TcpListener, SocketAddr)> {
     let listener = TcpListener::bind("localhost:0").await?;
     let local_port = listener.local_addr()?.port();
-    let client = Client::new("localhost", local_port, "localhost", 0, secret).await?;
-    let remote_addr = ([127, 0, 0, 1], client.remote_port()).into();
-    tokio::spawn(client.listen());
-    Ok((listener, remote_addr))
+    let client = Client::new("localhost", local_port, "localhost", 0, secret);
+    let remote_addr = ([127, 0, 0, 1], 3000).into();
+    let stream = client.connect().await?;
+    Ok((client, stream, listener, remote_addr))
 }
 
 #[rstest]
@@ -37,7 +40,8 @@ async fn basic_proxy(#[values(None, Some(""), Some("abc"))] secret: Option<&str>
     let _guard = SERIAL_GUARD.lock().await;
 
     spawn_server(secret).await;
-    let (listener, addr) = spawn_client(secret).await?;
+    let (client, stream, listener, addr) = spawn_client(secret).await?;
+    tokio::spawn(async move { client.listen(stream).await });
 
     tokio::spawn(async move {
         let (mut stream, _) = listener.accept().await?;
@@ -84,7 +88,8 @@ async fn mismatched_secret(
 async fn invalid_address() -> Result<()> {
     // We don't need the serial guard for this test because it doesn't create a server.
     async fn check_address(to: &str, use_secret: bool) -> Result<()> {
-        match Client::new("localhost", 5000, to, 0, use_secret.then_some("a secret")).await {
+        let client = Client::new("localhost", 5000, to, 0, use_secret.then_some("a secret"));
+        match client.connect().await {
             Ok(_) => Err(anyhow!("expected error for {to}, use_secret={use_secret}")),
             Err(_) => Ok(()),
         }
@@ -105,7 +110,7 @@ async fn very_long_frame() -> Result<()> {
     let _guard = SERIAL_GUARD.lock().await;
 
     spawn_server(None).await;
-    let mut attacker = TcpStream::connect(("localhost", CONTROL_PORT)).await?;
+    let mut attacker = TcpStream::connect(("localhost", 3000)).await?;
 
     // Slowly send a very long frame.
     for _ in 0..10 {
@@ -132,7 +137,7 @@ async fn half_closed_tcp_stream() -> Result<()> {
     let _guard = SERIAL_GUARD.lock().await;
 
     spawn_server(None).await;
-    let (listener, addr) = spawn_client(None).await?;
+    let (_, _, listener, addr) = spawn_client(None).await?;
 
     let (mut cli, (mut srv, _)) = tokio::try_join!(TcpStream::connect(addr), listener.accept())?;
 

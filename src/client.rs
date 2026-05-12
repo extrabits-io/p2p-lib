@@ -8,45 +8,77 @@ use tracing::{error, info, info_span, warn, Instrument};
 use uuid::Uuid;
 
 use crate::auth::Authenticator;
-use crate::shared::{ClientMessage, Delimited, ServerMessage, CONTROL_PORT, NETWORK_TIMEOUT};
+use crate::shared::{ClientMessage, Delimited, ServerMessage, NETWORK_TIMEOUT};
+
+/// Proxy that performs the bi-directional streaming between server and client
+struct Proxy {
+    to: String,
+    local_host: String,
+    local_port: u16,
+    auth: Option<Authenticator>,
+    control_port: u16,
+}
+
+impl Proxy {
+    async fn handle_connection(&self, id: Uuid) -> Result<()> {
+        let mut remote_conn =
+            Delimited::new(connect_with_timeout(&self.to[..], self.control_port).await?);
+
+        if let Some(auth) = &self.auth {
+            auth.client_handshake(&mut remote_conn).await?;
+        }
+
+        remote_conn.send(ClientMessage::Accept(id)).await?;
+        let mut local_conn = connect_with_timeout(&self.local_host, self.local_port).await?;
+
+        let mut parts = remote_conn.into_parts();
+        debug_assert!(parts.write_buf.is_empty(), "framed write buffer not empty");
+
+        local_conn.write_all(&parts.read_buf).await?;
+        tokio::io::copy_bidirectional(&mut local_conn, &mut parts.io).await?;
+        Ok(())
+    }
+}
 
 /// State structure for the client.
 pub struct Client {
-    /// Control connection to the server.
-    conn: Option<Delimited<TcpStream>>,
-
-    /// Destination address of the server.
-    to: String,
-
-    // Local host that is forwarded.
-    local_host: String,
-
-    /// Local port that is forwarded.
-    local_port: u16,
-
-    /// Port that is publicly available on the remote.
-    remote_port: u16,
-
-    /// Optional secret used to authenticate clients.
-    auth: Option<Authenticator>,
+    /// Proxy to handle remote connections.
+    proxy: Arc<Proxy>,
 }
 
 impl Client {
     /// Create a new client.
-    pub async fn new(
+    pub fn new(
         local_host: &str,
         local_port: u16,
         to: &str,
-        port: u16,
+        control_port: u16,
         secret: Option<&str>,
-    ) -> Result<Self> {
-        let mut stream = Delimited::new(connect_with_timeout(to, CONTROL_PORT).await?);
+    ) -> Self {
         let auth = secret.map(Authenticator::new);
-        if let Some(auth) = &auth {
+        Client {
+            proxy: Arc::new(Proxy {
+                to: to.to_string(),
+                local_host: local_host.to_string(),
+                local_port,
+                control_port,
+                auth,
+            }),
+        }
+    }
+
+    /// Connect to the server.
+    pub async fn connect(&self) -> Result<Delimited<TcpStream>> {
+        let mut stream =
+            Delimited::new(connect_with_timeout(&self.proxy.to, self.proxy.control_port).await?);
+
+        if let Some(auth) = &self.proxy.auth {
             auth.client_handshake(&mut stream).await?;
         }
 
-        stream.send(ClientMessage::Hello(port)).await?;
+        stream
+            .send(ClientMessage::Hello(self.proxy.local_port))
+            .await?;
         let remote_port = match stream.recv_timeout().await? {
             Some(ServerMessage::Hello(remote_port)) => remote_port,
             Some(ServerMessage::Error(message)) => bail!("server error: {message}"),
@@ -56,39 +88,27 @@ impl Client {
             Some(_) => bail!("unexpected initial non-hello message"),
             None => bail!("unexpected EOF"),
         };
+
         info!(remote_port, "connected to server");
-        info!("listening at {to}:{remote_port}");
+        info!("listening at {}:{}", self.proxy.to, remote_port);
 
-        Ok(Client {
-            conn: Some(stream),
-            to: to.to_string(),
-            local_host: local_host.to_string(),
-            local_port,
-            remote_port,
-            auth,
-        })
+        Ok(stream)
     }
 
-    /// Returns the port publicly available on the remote.
-    pub fn remote_port(&self) -> u16 {
-        self.remote_port
-    }
-
-    /// Start the client, listening for new connections.
-    pub async fn listen(mut self) -> Result<()> {
-        let mut conn = self.conn.take().unwrap();
-        let this = Arc::new(self);
+    /// Start the client, listening for new connections using a mutable reference.
+    pub async fn listen(&self, mut conn: Delimited<TcpStream>) -> Result<()> {
         loop {
             match conn.recv().await? {
                 Some(ServerMessage::Hello(_)) => warn!("unexpected hello"),
                 Some(ServerMessage::Challenge(_)) => warn!("unexpected challenge"),
                 Some(ServerMessage::Heartbeat) => (),
                 Some(ServerMessage::Connection(id)) => {
-                    let this = Arc::clone(&this);
+                    // Clone the Arc to move into the spawned task
+                    let proxy = Arc::clone(&self.proxy);
                     tokio::spawn(
                         async move {
                             info!("new connection");
-                            match this.handle_connection(id).await {
+                            match proxy.handle_connection(id).await {
                                 Ok(_) => info!("connection exited"),
                                 Err(err) => warn!(%err, "connection exited with error"),
                             }
@@ -100,21 +120,6 @@ impl Client {
                 None => return Ok(()),
             }
         }
-    }
-
-    async fn handle_connection(&self, id: Uuid) -> Result<()> {
-        let mut remote_conn =
-            Delimited::new(connect_with_timeout(&self.to[..], CONTROL_PORT).await?);
-        if let Some(auth) = &self.auth {
-            auth.client_handshake(&mut remote_conn).await?;
-        }
-        remote_conn.send(ClientMessage::Accept(id)).await?;
-        let mut local_conn = connect_with_timeout(&self.local_host, self.local_port).await?;
-        let mut parts = remote_conn.into_parts();
-        debug_assert!(parts.write_buf.is_empty(), "framed write buffer not empty");
-        local_conn.write_all(&parts.read_buf).await?; // mostly of the cases, this will be empty
-        tokio::io::copy_bidirectional(&mut local_conn, &mut parts.io).await?;
-        Ok(())
     }
 }
 
