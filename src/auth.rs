@@ -6,18 +6,18 @@ use std::{
 };
 
 use anyhow::{bail, ensure, Result};
-use ed25519_dalek::pkcs8::{spki::der::pem::LineEnding, DecodePublicKey, EncodePublicKey};
-use ed25519_dalek::{Signature, Signer, SigningKey, Verifier, VerifyingKey};
-use rand::{rngs::SysRng, TryRng};
+use ed25519_dalek::pkcs8::{DecodePublicKey, EncodePublicKey};
+use ed25519_dalek::{Signature, Signer, SigningKey, VerifyingKey};
+use rand::{rngs::OsRng, RngCore};
 use tokio::io::{AsyncRead, AsyncWrite};
 
 use crate::shared::{ClientMessage, Delimited, ServerMessage};
 
 const DOMAIN: &[u8] = b"P2P_RELAY_V1_CHALLENGE";
 
-fn generate_challenge() -> Result<(Vec<u8>, u64), anyhow::Error> {
+fn generate_challenge() -> (Vec<u8>, u64) {
     let mut nonce = [0u8; 32];
-    SysRng.try_fill_bytes(&mut nonce)?;
+    OsRng.fill_bytes(&mut nonce);
     let timestamp = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .unwrap()
@@ -27,7 +27,7 @@ fn generate_challenge() -> Result<(Vec<u8>, u64), anyhow::Error> {
     challenge.extend_from_slice(&timestamp.to_be_bytes());
     challenge.extend_from_slice(&nonce);
 
-    Ok((challenge, timestamp))
+    (challenge, timestamp)
 }
 
 /// Struct for authenticating clients that have a signing key.
@@ -59,9 +59,11 @@ impl Authenticator {
             .duration_since(UNIX_EPOCH)
             .unwrap()
             .as_secs();
-        ensure!(now - timestamp > 30, "Challenge has expired");
+        ensure!((now - timestamp) < 30, "Challenge has expired");
         let signature = Signature::from_str(signature_str)?;
-        verifying_key.verify(challenge, &signature)?;
+        // use verify_strict to mitigate weak key attacks
+        // https://docs.rs/ed25519-dalek/latest/ed25519_dalek/struct.VerifyingKey.html#strict-verification
+        verifying_key.verify_strict(challenge, &signature)?;
         Ok(())
     }
 
@@ -70,7 +72,7 @@ impl Authenticator {
         &self,
         stream: &mut Delimited<T>,
     ) -> Result<()> {
-        let (challenge, timestamp) = generate_challenge()?;
+        let (challenge, timestamp) = generate_challenge();
         stream
             .send(ServerMessage::Challenge(challenge.clone()))
             .await?;
@@ -79,7 +81,7 @@ impl Authenticator {
                 public_key,
                 signature,
             }) => {
-                let verifying_key = VerifyingKey::from_public_key_pem(&public_key)?;
+                let verifying_key = VerifyingKey::from_public_key_der(&public_key)?;
                 self.validate_signature(&verifying_key, &challenge, &signature, timestamp)?;
                 Ok(())
             }
@@ -94,12 +96,13 @@ impl Authenticator {
     ) -> Result<()> {
         let challenge = match stream.recv_timeout().await? {
             Some(ServerMessage::Challenge(challenge)) => challenge,
-            _ => bail!("expected authentication challenge, but no secret was required"),
+            _ => bail!("expected authentication challenge, but no challenge was sent"),
         };
         let public_key = self
             .signing_key
             .verifying_key()
-            .to_public_key_pem(LineEnding::LF)?;
+            .to_public_key_der()?
+            .to_vec();
         let signature = self.answer(&challenge);
         stream
             .send(ClientMessage::Authenticate {
