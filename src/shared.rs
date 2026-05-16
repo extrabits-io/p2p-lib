@@ -21,7 +21,12 @@ pub const NETWORK_TIMEOUT: Duration = Duration::from_secs(3);
 #[derive(Debug, Serialize, Deserialize)]
 pub enum ClientMessage {
     /// Response to an authentication challenge from the server.
-    Authenticate(String),
+    Authenticate {
+        /// The client's public key; known by the server
+        public_key: String,
+        /// The server's challenge, signed by the client's signing key
+        signature: String,
+    },
 
     /// Initial client message specifying a port to forward.
     Hello(u16),
@@ -34,7 +39,7 @@ pub enum ClientMessage {
 #[derive(Debug, Serialize, Deserialize)]
 pub enum ServerMessage {
     /// Authentication challenge, sent as the first message, if enabled.
-    Challenge(Uuid),
+    Challenge(Vec<u8>),
 
     /// Response to a client's initial message, with actual public port.
     Hello(u16),

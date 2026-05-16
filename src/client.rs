@@ -3,6 +3,7 @@
 use std::sync::Arc;
 
 use anyhow::{bail, Context, Result};
+use ed25519_dalek::SigningKey;
 use tokio::{io::AsyncWriteExt, net::TcpStream, time::timeout};
 use tracing::{error, info, info_span, warn, Instrument};
 use uuid::Uuid;
@@ -53,9 +54,9 @@ impl Client {
         local_port: u16,
         to: &str,
         control_port: u16,
-        secret: Option<&str>,
+        signing_key: Option<SigningKey>,
     ) -> Self {
-        let auth = secret.map(Authenticator::new);
+        let auth = signing_key.map(Authenticator::new);
         Client {
             proxy: Arc::new(Proxy {
                 to: to.to_string(),

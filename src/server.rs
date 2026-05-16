@@ -5,6 +5,7 @@ use std::{io, ops::RangeInclusive, sync::Arc, time::Duration};
 
 use anyhow::Result;
 use dashmap::DashMap;
+use ed25519_dalek::SigningKey;
 use tokio::io::AsyncWriteExt;
 use tokio::net::{TcpListener, TcpStream};
 use tokio::time::{sleep, timeout};
@@ -36,14 +37,14 @@ pub struct Server {
 
 impl Server {
     /// Create a new server with a specified minimum port number.
-    pub fn new(port_range: RangeInclusive<u16>, secret: Option<&str>) -> Self {
+    pub fn new(port_range: RangeInclusive<u16>, signing_key: Option<SigningKey>) -> Self {
         assert!(!port_range.len() > 1, "must provide at least two ports");
         let mut rng = port_range;
         let control_port = rng.next().unwrap();
         Server {
             port_range: rng,
             conns: Arc::new(DashMap::new()),
-            auth: secret.map(Authenticator::new),
+            auth: signing_key.map(Authenticator::new),
             bind_addr: IpAddr::V4(Ipv4Addr::UNSPECIFIED),
             bind_tunnels: IpAddr::V4(Ipv4Addr::UNSPECIFIED),
             control_port,
@@ -134,7 +135,10 @@ impl Server {
         }
 
         match stream.recv_timeout().await? {
-            Some(ClientMessage::Authenticate(_)) => {
+            Some(ClientMessage::Authenticate {
+                public_key: _,
+                signature: _,
+            }) => {
                 warn!("unexpected authenticate");
                 Ok(())
             }
