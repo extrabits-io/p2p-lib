@@ -73,6 +73,7 @@ impl Authenticator {
         stream: &mut Delimited<T>,
     ) -> Result<()> {
         let (challenge, timestamp) = generate_challenge();
+        tracing::debug!("Sending challenge: {:?}", &challenge);
         stream
             .send(ServerMessage::Challenge(challenge.clone()))
             .await?;
@@ -81,6 +82,7 @@ impl Authenticator {
                 public_key,
                 signature,
             }) => {
+                tracing::debug!("Received answer: {:?} {}", &public_key, &signature);
                 let verifying_key = VerifyingKey::from_public_key_der(&public_key)?;
                 self.validate_signature(&verifying_key, &challenge, &signature, timestamp)?;
                 Ok(())
