@@ -38,9 +38,12 @@ pub struct Server {
 impl Server {
     /// Create a new server with a specified minimum port number.
     pub fn new(port_range: RangeInclusive<u16>, signing_key: Option<SigningKey>) -> Self {
-        assert!(!port_range.len() > 1, "must provide at least two ports");
+        assert!(port_range.len() > 1, "Must provide at least two ports");
         let mut rng = port_range;
-        let control_port = rng.next().unwrap();
+        let control_port = match rng.next() {
+            Some(port) => port,
+            None => panic!("Must provide an ascending range of ports"),
+        };
         Server {
             port_range: rng,
             conns: Arc::new(DashMap::new()),
