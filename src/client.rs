@@ -8,7 +8,7 @@ use tokio::{io::AsyncWriteExt, net::TcpStream, time::timeout};
 use tracing::{error, info, info_span, warn, Instrument};
 use uuid::Uuid;
 
-use crate::auth::Authenticator;
+use crate::auth::ClientAuthenticator;
 use crate::shared::{ClientMessage, Delimited, ServerMessage, NETWORK_TIMEOUT};
 
 /// Proxy that performs the bi-directional streaming between server and client
@@ -16,7 +16,7 @@ struct Proxy {
     to: String,
     local_host: String,
     local_port: u16,
-    auth: Option<Authenticator>,
+    auth: Option<ClientAuthenticator>,
     control_port: u16,
 }
 
@@ -56,7 +56,7 @@ impl Client {
         control_port: u16,
         signing_key: Option<SigningKey>,
     ) -> Self {
-        let auth = signing_key.map(Authenticator::new);
+        let auth = signing_key.map(ClientAuthenticator::new);
         Client {
             proxy: Arc::new(Proxy {
                 to: to.to_string(),

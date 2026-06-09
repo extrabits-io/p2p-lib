@@ -30,13 +30,13 @@ fn generate_challenge() -> (Vec<u8>, u64) {
     (challenge, timestamp)
 }
 
-/// Struct for authenticating clients that have a signing key.
-pub struct Authenticator {
+/// Struct to answer server authentication challenges
+pub struct ClientAuthenticator {
     signing_key: SigningKey,
 }
 
-impl Authenticator {
-    /// Instanciate a new Authenticator
+impl ClientAuthenticator {
+    /// Instanciate a new ClientAuthenticator
     pub fn new(signing_key: SigningKey) -> Self {
         Self { signing_key }
     }
@@ -47,6 +47,42 @@ impl Authenticator {
         signature.to_string()
     }
 
+    /// As the client, answer a challenge to attempt to authenticate with the server.
+    pub async fn client_handshake<T: AsyncRead + AsyncWrite + Unpin>(
+        &self,
+        stream: &mut Delimited<T>,
+    ) -> Result<()> {
+        let challenge = match stream.recv_timeout().await? {
+            Some(ServerMessage::Challenge(challenge)) => challenge,
+            _ => bail!("expected authentication challenge, but no challenge was sent"),
+        };
+        let public_key = self
+            .signing_key
+            .verifying_key()
+            .to_public_key_der()?
+            .to_vec();
+        let signature = self.answer(&challenge);
+        stream
+            .send(ClientMessage::Authenticate {
+                public_key,
+                signature,
+            })
+            .await?;
+        Ok(())
+    }
+}
+
+/// Struct for authenticating clients that have a signing key.
+pub struct ServerAuthenticator {
+    allowed_clients: Vec<VerifyingKey>,
+}
+
+impl ServerAuthenticator {
+    /// Instanciate a new ServerAuthenticator
+    pub fn new(allowed_clients: Vec<VerifyingKey>) -> Self {
+        Self { allowed_clients }
+    }
+
     /// Validate a reply to a challenge.
     pub fn validate_signature(
         &self,
@@ -55,6 +91,10 @@ impl Authenticator {
         signature_str: &str,
         timestamp: u64,
     ) -> Result<()> {
+        ensure!(
+            self.allowed_clients.contains(verifying_key),
+            "Invalid client key"
+        );
         let now = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .unwrap()
@@ -89,29 +129,5 @@ impl Authenticator {
             }
             _ => bail!("server requires secret, but no secret was provided"),
         }
-    }
-
-    /// As the client, answer a challenge to attempt to authenticate with the server.
-    pub async fn client_handshake<T: AsyncRead + AsyncWrite + Unpin>(
-        &self,
-        stream: &mut Delimited<T>,
-    ) -> Result<()> {
-        let challenge = match stream.recv_timeout().await? {
-            Some(ServerMessage::Challenge(challenge)) => challenge,
-            _ => bail!("expected authentication challenge, but no challenge was sent"),
-        };
-        let public_key = self
-            .signing_key
-            .verifying_key()
-            .to_public_key_der()?
-            .to_vec();
-        let signature = self.answer(&challenge);
-        stream
-            .send(ClientMessage::Authenticate {
-                public_key,
-                signature,
-            })
-            .await?;
-        Ok(())
     }
 }

@@ -4,7 +4,7 @@ use std::time::Duration;
 use anyhow::{anyhow, Result};
 use bore_cli::shared::{generate_signing_key, Delimited};
 use bore_cli::{client::Client, server::Server};
-use ed25519_dalek::SigningKey;
+use ed25519_dalek::{SigningKey, VerifyingKey};
 use lazy_static::lazy_static;
 use rstest::*;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -21,8 +21,9 @@ const PORT_RANGE_START: u16 = 3000;
 const PORT_RANGE_END: u16 = 3050;
 
 /// Spawn the server, giving some time for the control port TcpListener to start.
-async fn spawn_server(secret: Option<SigningKey>) {
-    tokio::spawn(Server::new(PORT_RANGE_START..=PORT_RANGE_END, secret).listen());
+async fn spawn_server(secret: Option<VerifyingKey>) {
+    let allowed_clients = secret.map(|key| vec![key]);
+    tokio::spawn(Server::new(PORT_RANGE_START..=PORT_RANGE_END, allowed_clients).listen());
     time::sleep(Duration::from_millis(50)).await;
 }
 
@@ -49,13 +50,14 @@ async fn spawn_client(
 async fn basic_proxy(#[values(false, true)] should_use_key: bool) -> Result<()> {
     let _guard = SERIAL_GUARD.lock().await;
 
-    let key = if should_use_key {
+    let client_key = if should_use_key {
         Some(generate_signing_key())
     } else {
         None
     };
-    spawn_server(key.clone()).await;
-    let (client, stream, listener, addr) = spawn_client(key).await?;
+    let server_key = client_key.clone().map(|key| key.verifying_key());
+    spawn_server(server_key).await;
+    let (client, stream, listener, addr) = spawn_client(client_key).await?;
     tokio::spawn(async move { client.listen(stream).await });
 
     tokio::spawn(async move {
@@ -85,19 +87,30 @@ async fn basic_proxy(#[values(false, true)] should_use_key: bool) -> Result<()> 
     Ok(())
 }
 
-// #[rstest]
-// #[case(None, Some("my secret"))]
-// #[case(Some("my secret"), None)]
-// #[tokio::test]
-// async fn mismatched_secret(
-//     #[case] server_secret: Option<&str>,
-//     #[case] client_secret: Option<&str>,
-// ) {
-//     let _guard = SERIAL_GUARD.lock().await;
+#[rstest]
+#[case(false, true)]
+#[case(true, false)]
+#[tokio::test]
+async fn mismatched_secret(
+    #[case] should_use_server_key: bool,
+    #[case] should_use_client_key: bool,
+) {
+    let _guard = SERIAL_GUARD.lock().await;
+    let key = generate_signing_key();
+    let server_key = if should_use_server_key {
+        Some(key.verifying_key())
+    } else {
+        None
+    };
+    let client_key = if should_use_client_key {
+        Some(key)
+    } else {
+        None
+    };
 
-//     spawn_server(server_secret).await;
-//     assert!(spawn_client(client_secret).await.is_err());
-// }
+    spawn_server(server_key).await;
+    assert!(spawn_client(client_key).await.is_err());
+}
 
 #[tokio::test]
 async fn invalid_address() -> Result<()> {
