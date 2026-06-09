@@ -23,7 +23,9 @@ const PORT_RANGE_END: u16 = 3050;
 /// Spawn the server, giving some time for the control port TcpListener to start.
 async fn spawn_server(secret: Option<VerifyingKey>) {
     let allowed_clients = secret.map(|key| vec![key]);
-    tokio::spawn(Server::new(PORT_RANGE_START..=PORT_RANGE_END, allowed_clients).listen());
+    let mut server = Server::new(PORT_RANGE_START..=PORT_RANGE_END, allowed_clients);
+    server.set_bind_tunnels(std::net::IpAddr::V4(std::net::Ipv4Addr::new(127, 0, 0, 2)));
+    tokio::spawn(server.listen());
     time::sleep(Duration::from_millis(50)).await;
 }
 
@@ -40,7 +42,7 @@ async fn spawn_client(
         PORT_RANGE_START,
         secret,
     );
-    let remote_addr = ([127, 0, 0, 1], PORT_RANGE_START).into();
+    let remote_addr = ([127, 0, 0, 2], local_port).into();
     let stream = client.connect().await?;
     Ok((client, stream, listener, remote_addr))
 }
