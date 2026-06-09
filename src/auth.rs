@@ -84,7 +84,7 @@ impl ServerAuthenticator {
     }
 
     /// Validate a reply to a challenge.
-    pub fn validate_signature(
+    pub fn validate(
         &self,
         verifying_key: &VerifyingKey,
         challenge: &[u8],
@@ -127,7 +127,7 @@ impl ServerAuthenticator {
             }) => {
                 tracing::debug!("Received answer: {:?} {}", &public_key, &signature);
                 let verifying_key = VerifyingKey::from_public_key_der(&public_key)?;
-                self.validate_signature(&verifying_key, &challenge, &signature, timestamp)?;
+                self.validate(&verifying_key, &challenge, &signature, timestamp)?;
                 Ok(())
             }
             _ => bail!("server requires authentication, but challenge was not answered"),
