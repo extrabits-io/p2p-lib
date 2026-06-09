@@ -1,10 +1,10 @@
 [package]
 name = "bore-cli"
 version = "0.6.0"
-authors = ["Eric Zhang <ekzhang1@gmail.com>"]
+authors = ["Eric Zhang <ekzhang1@gmail.com>", "Jamin Menter <jaminmenter@outlook.com>"]
 license = "MIT"
 description = "A modern, simple TCP tunnel in Rust that exposes local ports to a remote server, bypassing standard NAT connection firewalls."
-repository = "https://github.com/ekzhang/bore"
+repository = "https://github.com/jmanm/bore"
 documentation = "https://docs.rs/bore-cli"
 keywords = ["network", "cli", "tunnel", "tcp"]
 categories = ["network-programming", "web-programming", "command-line-utilities"]
@@ -19,13 +19,12 @@ path = "src/main.rs"
 anyhow = { version = "1.0.56", features = ["backtrace"] }
 clap = { version = "4.0.22", features = ["derive", "env"] }
 dashmap = "5.2.0"
+ed25519-dalek = { version = "2.2.0", features = ["pem", "rand_core"] }
 fastrand = "1.9.0"
 futures-util = { version = "0.3.21", features = ["sink"] }
-hex = "0.4.3"
-hmac = "0.12.1"
+rand = "0.8.6"
 serde = { version = "1.0.136", features = ["derive"] }
 serde_json = "1.0.79"
-sha2 = "0.10.2"
 tokio = { version = "1.17.0", features = ["rt-multi-thread", "io-util", "macros", "net", "time"] }
 tokio-util = { version = "0.7.1", features = ["codec"] }
 tracing = "0.1.32"

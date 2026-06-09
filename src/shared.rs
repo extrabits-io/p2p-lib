@@ -3,7 +3,9 @@
 use std::time::Duration;
 
 use anyhow::{Context, Result};
+use ed25519_dalek::SigningKey;
 use futures_util::{SinkExt, StreamExt};
+use rand::rngs::OsRng;
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use tokio::io::{AsyncRead, AsyncWrite};
 use tokio::time::timeout;
@@ -12,7 +14,7 @@ use tracing::trace;
 use uuid::Uuid;
 
 /// Maximum byte length for a JSON frame in the stream.
-pub const MAX_FRAME_LENGTH: usize = 256;
+pub const MAX_FRAME_LENGTH: usize = 512;
 
 /// Timeout for network connections and initial protocol messages.
 pub const NETWORK_TIMEOUT: Duration = Duration::from_secs(3);
@@ -21,7 +23,12 @@ pub const NETWORK_TIMEOUT: Duration = Duration::from_secs(3);
 #[derive(Debug, Serialize, Deserialize)]
 pub enum ClientMessage {
     /// Response to an authentication challenge from the server.
-    Authenticate(String),
+    Authenticate {
+        /// The client's public key; known by the server
+        public_key: Vec<u8>,
+        /// The server's challenge, signed by the client's signing key
+        signature: String,
+    },
 
     /// Initial client message specifying a port to forward.
     Hello(u16),
@@ -34,7 +41,7 @@ pub enum ClientMessage {
 #[derive(Debug, Serialize, Deserialize)]
 pub enum ServerMessage {
     /// Authentication challenge, sent as the first message, if enabled.
-    Challenge(Uuid),
+    Challenge(Vec<u8>),
 
     /// Response to a client's initial message, with actual public port.
     Hello(u16),
@@ -93,4 +100,10 @@ impl<U: AsyncRead + AsyncWrite + Unpin> Delimited<U> {
     pub fn into_parts(self) -> FramedParts<U, AnyDelimiterCodec> {
         self.0.into_parts()
     }
+}
+
+/// Generate a new signing key.
+pub fn generate_signing_key() -> SigningKey {
+    let mut csprng = OsRng;
+    SigningKey::generate(&mut csprng)
 }

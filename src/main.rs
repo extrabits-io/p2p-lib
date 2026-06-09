@@ -30,10 +30,9 @@ enum Command {
         /// Control port on the remote server.
         #[clap(short, long, env = "BORE_PORT")]
         port: u16,
-
-        /// Optional secret for authentication.
-        #[clap(short, long, env = "BORE_SECRET", hide_env_values = true)]
-        secret: Option<String>,
+        // Optional secret for authentication.
+        // #[clap(short, long, env = "BORE_SECRET", hide_env_values = true)]
+        // secret: Option<String>,
     },
 
     /// Runs the remote proxy server.
@@ -47,8 +46,8 @@ enum Command {
         max_port: u16,
 
         /// Optional secret for authentication.
-        #[clap(short, long, env = "BORE_SECRET", hide_env_values = true)]
-        secret: Option<String>,
+        // #[clap(short, long, env = "BORE_SECRET", hide_env_values = true)]
+        // secret: Option<String>,
 
         /// IP address to bind to, clients must reach this.
         #[clap(long, default_value = "0.0.0.0")]
@@ -68,16 +67,16 @@ async fn run(command: Command) -> Result<()> {
             local_port,
             to,
             port,
-            secret,
+            // secret,
         } => {
-            let client = Client::new(&local_host, local_port, &to, port, secret.as_deref());
+            let client = Client::new(&local_host, local_port, &to, port, None);
             let stream = client.connect().await?;
             client.listen(stream).await?;
         }
         Command::Server {
             min_port,
             max_port,
-            secret,
+            // secret,
             bind_addr,
             bind_tunnels,
         } => {
@@ -87,7 +86,7 @@ async fn run(command: Command) -> Result<()> {
                     .error(ErrorKind::InvalidValue, "port range is empty")
                     .exit();
             }
-            let mut server = Server::new(port_range, secret.as_deref());
+            let mut server = Server::new(port_range, None);
             server.set_bind_addr(bind_addr);
             server.set_bind_tunnels(bind_tunnels.unwrap_or(bind_addr));
             server.listen().await?;

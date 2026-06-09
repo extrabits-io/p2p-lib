@@ -1,66 +1,50 @@
 //! Auth implementation for bore client and server.
 
+use std::{
+    str::FromStr,
+    time::{SystemTime, UNIX_EPOCH},
+};
+
 use anyhow::{bail, ensure, Result};
-use hmac::{Hmac, Mac};
-use sha2::{Digest, Sha256};
+use ed25519_dalek::pkcs8::{DecodePublicKey, EncodePublicKey};
+use ed25519_dalek::{Signature, Signer, SigningKey, VerifyingKey};
+use rand::{rngs::OsRng, RngCore};
 use tokio::io::{AsyncRead, AsyncWrite};
-use uuid::Uuid;
 
 use crate::shared::{ClientMessage, Delimited, ServerMessage};
 
-/// Wrapper around a MAC used for authenticating clients that have a secret.
-pub struct Authenticator(Hmac<Sha256>);
+const DOMAIN: &[u8] = b"P2P_RELAY_V1_CHALLENGE";
 
-impl Authenticator {
-    /// Generate an authenticator from a secret.
-    pub fn new(secret: &str) -> Self {
-        let hashed_secret = Sha256::new().chain_update(secret).finalize();
-        Self(Hmac::new_from_slice(&hashed_secret).expect("HMAC can take key of any size"))
+fn generate_challenge() -> (Vec<u8>, u64) {
+    let mut nonce = [0u8; 32];
+    OsRng.fill_bytes(&mut nonce);
+    let timestamp = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_secs();
+
+    let mut challenge = DOMAIN.to_vec();
+    challenge.extend_from_slice(&timestamp.to_be_bytes());
+    challenge.extend_from_slice(&nonce);
+
+    (challenge, timestamp)
+}
+
+/// Struct to answer server authentication challenges
+pub struct ClientAuthenticator {
+    signing_key: SigningKey,
+}
+
+impl ClientAuthenticator {
+    /// Instantiate a new ClientAuthenticator
+    pub fn new(signing_key: SigningKey) -> Self {
+        Self { signing_key }
     }
 
     /// Generate a reply message for a challenge.
-    pub fn answer(&self, challenge: &Uuid) -> String {
-        let mut hmac = self.0.clone();
-        hmac.update(challenge.as_bytes());
-        hex::encode(hmac.finalize().into_bytes())
-    }
-
-    /// Validate a reply to a challenge.
-    ///
-    /// ```
-    /// use bore_cli::auth::Authenticator;
-    /// use uuid::Uuid;
-    ///
-    /// let auth = Authenticator::new("secret");
-    /// let challenge = Uuid::new_v4();
-    ///
-    /// assert!(auth.validate(&challenge, &auth.answer(&challenge)));
-    /// assert!(!auth.validate(&challenge, "wrong answer"));
-    /// ```
-    pub fn validate(&self, challenge: &Uuid, tag: &str) -> bool {
-        if let Ok(tag) = hex::decode(tag) {
-            let mut hmac = self.0.clone();
-            hmac.update(challenge.as_bytes());
-            hmac.verify_slice(&tag).is_ok()
-        } else {
-            false
-        }
-    }
-
-    /// As the server, send a challenge to the client and validate their response.
-    pub async fn server_handshake<T: AsyncRead + AsyncWrite + Unpin>(
-        &self,
-        stream: &mut Delimited<T>,
-    ) -> Result<()> {
-        let challenge = Uuid::new_v4();
-        stream.send(ServerMessage::Challenge(challenge)).await?;
-        match stream.recv_timeout().await? {
-            Some(ClientMessage::Authenticate(tag)) => {
-                ensure!(self.validate(&challenge, &tag), "invalid secret");
-                Ok(())
-            }
-            _ => bail!("server requires secret, but no secret was provided"),
-        }
+    pub fn answer(&self, challenge: &[u8]) -> String {
+        let signature = self.signing_key.sign(challenge);
+        signature.to_string()
     }
 
     /// As the client, answer a challenge to attempt to authenticate with the server.
@@ -70,10 +54,83 @@ impl Authenticator {
     ) -> Result<()> {
         let challenge = match stream.recv_timeout().await? {
             Some(ServerMessage::Challenge(challenge)) => challenge,
-            _ => bail!("expected authentication challenge, but no secret was required"),
+            _ => bail!("expected authentication challenge, but no challenge was sent"),
         };
-        let tag = self.answer(&challenge);
-        stream.send(ClientMessage::Authenticate(tag)).await?;
+        let public_key = self
+            .signing_key
+            .verifying_key()
+            .to_public_key_der()?
+            .to_vec();
+        let signature = self.answer(&challenge);
+        stream
+            .send(ClientMessage::Authenticate {
+                public_key,
+                signature,
+            })
+            .await?;
         Ok(())
+    }
+}
+
+/// Struct for authenticating clients that have a signing key.
+pub struct ServerAuthenticator {
+    allowed_clients: Vec<VerifyingKey>,
+}
+
+impl ServerAuthenticator {
+    /// Instantiate a new ServerAuthenticator
+    pub fn new(allowed_clients: Vec<VerifyingKey>) -> Self {
+        Self { allowed_clients }
+    }
+
+    /// Validate a reply to a challenge.
+    pub fn validate(
+        &self,
+        verifying_key: &VerifyingKey,
+        challenge: &[u8],
+        signature_str: &str,
+        timestamp: u64,
+    ) -> Result<()> {
+        ensure!(
+            self.allowed_clients.contains(verifying_key),
+            "Invalid client key"
+        );
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
+        ensure!(
+            now >= timestamp && (now - timestamp) < 30,
+            "Challenge has expired"
+        );
+        let signature = Signature::from_str(signature_str)?;
+        // use verify_strict to mitigate weak key attacks
+        // https://docs.rs/ed25519-dalek/latest/ed25519_dalek/struct.VerifyingKey.html#strict-verification
+        verifying_key.verify_strict(challenge, &signature)?;
+        Ok(())
+    }
+
+    /// As the server, send a challenge to the client and validate their response.
+    pub async fn server_handshake<T: AsyncRead + AsyncWrite + Unpin>(
+        &self,
+        stream: &mut Delimited<T>,
+    ) -> Result<()> {
+        let (challenge, timestamp) = generate_challenge();
+        tracing::debug!("Sending challenge: {:?}", &challenge);
+        stream
+            .send(ServerMessage::Challenge(challenge.clone()))
+            .await?;
+        match stream.recv_timeout().await? {
+            Some(ClientMessage::Authenticate {
+                public_key,
+                signature,
+            }) => {
+                tracing::debug!("Received answer: {:?} {}", &public_key, &signature);
+                let verifying_key = VerifyingKey::from_public_key_der(&public_key)?;
+                self.validate(&verifying_key, &challenge, &signature, timestamp)?;
+                Ok(())
+            }
+            _ => bail!("server requires authentication, but challenge was not answered"),
+        }
     }
 }

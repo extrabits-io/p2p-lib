@@ -5,13 +5,14 @@ use std::{io, ops::RangeInclusive, sync::Arc, time::Duration};
 
 use anyhow::Result;
 use dashmap::DashMap;
+use ed25519_dalek::VerifyingKey;
 use tokio::io::AsyncWriteExt;
 use tokio::net::{TcpListener, TcpStream};
 use tokio::time::{sleep, timeout};
 use tracing::{info, info_span, warn, Instrument};
 use uuid::Uuid;
 
-use crate::auth::Authenticator;
+use crate::auth::ServerAuthenticator;
 use crate::shared::{ClientMessage, Delimited, ServerMessage};
 
 /// State structure for the server.
@@ -19,8 +20,8 @@ pub struct Server {
     /// Range of TCP ports that can be forwarded.
     port_range: RangeInclusive<u16>,
 
-    /// Optional secret used to authenticate clients.
-    auth: Option<Authenticator>,
+    /// Optional authenticator used to authenticate clients.
+    auth: Option<ServerAuthenticator>,
 
     /// Concurrent map of IDs to incoming connections.
     conns: Arc<DashMap<Uuid, TcpStream>>,
@@ -36,14 +37,20 @@ pub struct Server {
 
 impl Server {
     /// Create a new server with a specified minimum port number.
-    pub fn new(port_range: RangeInclusive<u16>, secret: Option<&str>) -> Self {
-        assert!(!port_range.len() > 1, "must provide at least two ports");
+    pub fn new(
+        port_range: RangeInclusive<u16>,
+        allowed_clients: Option<Vec<VerifyingKey>>,
+    ) -> Self {
+        assert!(port_range.len() > 1, "Must provide at least two ports");
         let mut rng = port_range;
-        let control_port = rng.next().unwrap();
+        let control_port = match rng.next() {
+            Some(port) => port,
+            None => panic!("Must provide an ascending range of ports"),
+        };
         Server {
             port_range: rng,
             conns: Arc::new(DashMap::new()),
-            auth: secret.map(Authenticator::new),
+            auth: allowed_clients.map(ServerAuthenticator::new),
             bind_addr: IpAddr::V4(Ipv4Addr::UNSPECIFIED),
             bind_tunnels: IpAddr::V4(Ipv4Addr::UNSPECIFIED),
             control_port,
@@ -134,7 +141,10 @@ impl Server {
         }
 
         match stream.recv_timeout().await? {
-            Some(ClientMessage::Authenticate(_)) => {
+            Some(ClientMessage::Authenticate {
+                public_key: _,
+                signature: _,
+            }) => {
                 warn!("unexpected authenticate");
                 Ok(())
             }
