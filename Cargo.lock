@@ -85,28 +85,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "bore-cli"
-version = "0.6.0"
-dependencies = [
- "anyhow",
- "clap",
- "dashmap",
- "ed25519-dalek",
- "fastrand",
- "futures-util",
- "lazy_static",
- "rand",
- "rstest",
- "serde",
- "serde_json",
- "tokio",
- "tokio-util",
- "tracing",
- "tracing-subscriber",
- "uuid",
-]
-
-[[package]]
 name = "bytes"
 version = "1.4.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -577,6 +555,28 @@ name = "overload"
 version = "0.1.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b15813163c1d831bf4a13c3610c05c0d03b39feb07f7e09fa234dac9b15aaf39"
+
+[[package]]
+name = "p2p-lib"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "clap",
+ "dashmap",
+ "ed25519-dalek",
+ "fastrand",
+ "futures-util",
+ "lazy_static",
+ "rand",
+ "rstest",
+ "serde",
+ "serde_json",
+ "tokio",
+ "tokio-util",
+ "tracing",
+ "tracing-subscriber",
+ "uuid",
+]
 
 [[package]]
 name = "parking_lot_core"

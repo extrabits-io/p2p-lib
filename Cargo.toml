@@ -1,19 +1,14 @@
 [package]
-name = "bore-cli"
-version = "0.6.0"
+name = "p2p-lib"
+version = "0.1.0"
 authors = ["Eric Zhang <ekzhang1@gmail.com>", "Jamin Menter <jaminmenter@outlook.com>"]
 license = "MIT"
 description = "A modern, simple TCP tunnel in Rust that exposes local ports to a remote server, bypassing standard NAT connection firewalls."
-repository = "https://github.com/jmanm/bore"
-documentation = "https://docs.rs/bore-cli"
+repository = "https://github.com/extrabits-io/p2p-lib"
 keywords = ["network", "cli", "tunnel", "tcp"]
-categories = ["network-programming", "web-programming", "command-line-utilities"]
+categories = ["network-programming", "web-programming"]
 readme = "README.md"
 edition = "2021"
-
-[[bin]]
-name = "bore"
-path = "src/main.rs"
 
 [dependencies]
 anyhow = { version = "1.0.56", features = ["backtrace"] }
