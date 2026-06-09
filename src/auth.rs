@@ -36,7 +36,7 @@ pub struct ClientAuthenticator {
 }
 
 impl ClientAuthenticator {
-    /// Instanciate a new ClientAuthenticator
+    /// Instantiate a new ClientAuthenticator
     pub fn new(signing_key: SigningKey) -> Self {
         Self { signing_key }
     }
@@ -78,7 +78,7 @@ pub struct ServerAuthenticator {
 }
 
 impl ServerAuthenticator {
-    /// Instanciate a new ServerAuthenticator
+    /// Instantiate a new ServerAuthenticator
     pub fn new(allowed_clients: Vec<VerifyingKey>) -> Self {
         Self { allowed_clients }
     }
@@ -99,7 +99,10 @@ impl ServerAuthenticator {
             .duration_since(UNIX_EPOCH)
             .unwrap()
             .as_secs();
-        ensure!((now - timestamp) < 30, "Challenge has expired");
+        ensure!(
+            now >= timestamp && (now - timestamp) < 30,
+            "Challenge has expired"
+        );
         let signature = Signature::from_str(signature_str)?;
         // use verify_strict to mitigate weak key attacks
         // https://docs.rs/ed25519-dalek/latest/ed25519_dalek/struct.VerifyingKey.html#strict-verification
@@ -127,7 +130,7 @@ impl ServerAuthenticator {
                 self.validate_signature(&verifying_key, &challenge, &signature, timestamp)?;
                 Ok(())
             }
-            _ => bail!("server requires secret, but no secret was provided"),
+            _ => bail!("server requires authentication, but challenge was not answered"),
         }
     }
 }

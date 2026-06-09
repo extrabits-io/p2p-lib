@@ -20,7 +20,7 @@ pub struct Server {
     /// Range of TCP ports that can be forwarded.
     port_range: RangeInclusive<u16>,
 
-    /// Optional secret used to authenticate clients.
+    /// Optional authenticator used to authenticate clients.
     auth: Option<ServerAuthenticator>,
 
     /// Concurrent map of IDs to incoming connections.
