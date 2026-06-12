@@ -1,0 +1,19 @@
+#!/usr/bin/env bash
+# Keeps workspace/Cargo.{toml,lock} in sync with the parent workspace root.
+# Silently skips if the parent workspace files don't exist (standalone clone).
+set -euo pipefail
+
+REPO_ROOT="$(git rev-parse --show-toplevel)"
+WORKSPACE_ROOT="$(dirname "$REPO_ROOT")"
+DEST="$REPO_ROOT/workspace"
+
+for file in Cargo.toml Cargo.lock; do
+    src="$WORKSPACE_ROOT/$file"
+    dst="$DEST/$file"
+    if [[ -f "$src" ]]; then
+        if ! diff -q "$src" "$dst" > /dev/null 2>&1; then
+            cp "$src" "$dst"
+            git add "$dst"
+        fi
+    fi
+done
