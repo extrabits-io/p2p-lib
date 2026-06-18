@@ -6,22 +6,21 @@ on:
       - main
   pull_request:
 
-x-setup: &setup
-  - uses: actions/checkout@v4
-  - run: |
-      BRANCH="${{ github.head_ref || github.ref_name }}"
-      git clone https://github.com/extrabits-io/p2p-relay.git ../p2p-relay
-      git -C ../p2p-relay checkout "$BRANCH" || true
-      git clone https://github.com/extrabits-io/p2p-app-host.git ../p2p-app-host
-      git -C ../p2p-app-host checkout "$BRANCH" || true
-  - run: cp workspace/Cargo.* ..
-
 jobs:
   rust:
     name: Build and Test
     runs-on: ubuntu-latest
     steps:
-      - *setup
+      - uses: actions/checkout@v4
+      - &clone-repos
+        run: |
+          BRANCH="${{ github.head_ref || github.ref_name }}"
+          git clone https://github.com/extrabits-io/p2p-relay.git ../p2p-relay
+          git -C ../p2p-relay checkout "$BRANCH" || true
+          git clone https://github.com/extrabits-io/p2p-app-host.git ../p2p-app-host
+          git -C ../p2p-app-host checkout "$BRANCH" || true
+      - &copy-workspace
+        run: cp workspace/Cargo.* ..
       - uses: actions-rs/toolchain@v1
         with:
           profile: minimal
@@ -33,7 +32,9 @@ jobs:
     name: Rustfmt
     runs-on: ubuntu-latest
     steps:
-      - *setup
+      - uses: actions/checkout@v4
+      - *clone-repos
+      - *copy-workspace
       - uses: actions-rs/toolchain@v1
         with:
           profile: minimal
@@ -45,7 +46,9 @@ jobs:
     name: Clippy
     runs-on: ubuntu-latest
     steps:
-      - *setup
+      - uses: actions/checkout@v4
+      - *clone-repos
+      - *copy-workspace
       - uses: actions-rs/toolchain@v1
         with:
           profile: minimal
