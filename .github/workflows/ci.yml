@@ -12,14 +12,20 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-
+      - &clone-repos
+        run: |
+          BRANCH="${{ github.head_ref || github.ref_name }}"
+          git clone https://github.com/extrabits-io/p2p-relay.git ../p2p-relay
+          git -C ../p2p-relay checkout "$BRANCH" || true
+          git clone https://github.com/extrabits-io/p2p-app-host.git ../p2p-app-host
+          git -C ../p2p-app-host checkout "$BRANCH" || true
+      - &copy-workspace
+        run: cp workspace/Cargo.* ..
       - uses: actions-rs/toolchain@v1
         with:
           profile: minimal
           toolchain: stable
-
       - run: cargo build --all-features
-
       - run: cargo test
 
   rustfmt:
@@ -27,13 +33,13 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-
+      - *clone-repos
+      - *copy-workspace
       - uses: actions-rs/toolchain@v1
         with:
           profile: minimal
           toolchain: stable
           components: rustfmt
-
       - run: cargo fmt -- --check
 
   clippy:
@@ -41,11 +47,11 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-
+      - *clone-repos
+      - *copy-workspace
       - uses: actions-rs/toolchain@v1
         with:
           profile: minimal
           toolchain: stable
           components: clippy
-
       - run: cargo clippy -- -D warnings

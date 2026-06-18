@@ -2,10 +2,10 @@ use std::net::SocketAddr;
 use std::time::Duration;
 
 use anyhow::{anyhow, Result};
-use bore_cli::shared::{generate_signing_key, Delimited};
-use bore_cli::{client::Client, server::Server};
 use ed25519_dalek::{SigningKey, VerifyingKey};
 use lazy_static::lazy_static;
+use p2p_lib::shared::{generate_signing_key, Delimited};
+use p2p_lib::{client::Client, server::Server};
 use rstest::*;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};

@@ -1,5 +1,5 @@
 use anyhow::Result;
-use bore_cli::{
+use p2p_lib::{
     auth::{ClientAuthenticator, ServerAuthenticator},
     shared::{generate_signing_key, Delimited},
 };
