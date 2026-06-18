@@ -13,6 +13,10 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - run: git clone https://github.com/extrabits-io/p2p-relay.git ../p2p-relay
+      - run: git clone https://github.com/extrabits-io/p2p-app-host.git ../p2p-app-host
+      - run: cp workspace/Cargo.* ..
+
       - uses: actions-rs/toolchain@v1
         with:
           profile: minimal
@@ -28,6 +32,10 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - run: git clone https://github.com/extrabits-io/p2p-relay.git ../p2p-relay
+      - run: git clone https://github.com/extrabits-io/p2p-app-host.git ../p2p-app-host
+      - run: cp workspace/Cargo.* ..
+
       - uses: actions-rs/toolchain@v1
         with:
           profile: minimal
@@ -41,6 +49,10 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+
+      - run: git clone https://github.com/extrabits-io/p2p-relay.git ../p2p-relay
+      - run: git clone https://github.com/extrabits-io/p2p-app-host.git ../p2p-app-host
+      - run: cp workspace/Cargo.* ..
 
       - uses: actions-rs/toolchain@v1
         with:
