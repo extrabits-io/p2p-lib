@@ -17,6 +17,7 @@ dashmap = "5.2.0"
 ed25519-dalek = { workspace = true }
 fastrand = "1.9.0"
 futures-util = { version = "0.3.21", features = ["sink"] }
+hex = "0.4.3"
 rand = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
@@ -24,7 +25,6 @@ tokio = { workspace = true, features = ["rt-multi-thread", "io-util", "macros", 
 tokio-util = { version = "0.7.1", features = ["codec"] }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
-uuid = { version = "1.2.1", features = ["serde", "v4"] }
 
 [dev-dependencies]
 lazy_static = "1.4.0"

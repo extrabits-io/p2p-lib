@@ -10,10 +10,9 @@ use tokio::io::AsyncWriteExt;
 use tokio::net::{TcpListener, TcpStream};
 use tokio::time::{sleep, timeout};
 use tracing::{info, info_span, warn, Instrument};
-use uuid::Uuid;
 
 use crate::auth::ServerAuthenticator;
-use crate::shared::{ClientMessage, Delimited, ServerMessage};
+use crate::shared::{ClientMessage, Delimited, PeerKey, ServerMessage};
 
 /// State structure for the server.
 pub struct Server {
@@ -24,7 +23,7 @@ pub struct Server {
     auth: Option<ServerAuthenticator>,
 
     /// Concurrent map of IDs to incoming connections.
-    conns: Arc<DashMap<Uuid, TcpStream>>,
+    conns: Arc<DashMap<PeerKey, TcpStream>>,
 
     /// IP address where the control server will bind to.
     bind_addr: IpAddr,
@@ -38,17 +37,13 @@ pub struct Server {
 impl Server {
     /// Create a new server with a specified minimum port number.
     pub fn new(
-        port_range: RangeInclusive<u16>,
+        control_port: u16,
+        peer_port_range: RangeInclusive<u16>,
         allowed_clients: Option<Vec<VerifyingKey>>,
     ) -> Self {
-        assert!(port_range.len() > 1, "Must provide at least two ports");
-        let mut rng = port_range;
-        let control_port = match rng.next() {
-            Some(port) => port,
-            None => panic!("Must provide an ascending range of ports"),
-        };
+        assert!(peer_port_range.len() > 1, "Must provide at least two ports");
         Server {
-            port_range: rng,
+            port_range: peer_port_range,
             conns: Arc::new(DashMap::new()),
             auth: allowed_clients.map(ServerAuthenticator::new),
             bind_addr: IpAddr::V4(Ipv4Addr::UNSPECIFIED),
@@ -148,7 +143,7 @@ impl Server {
                 warn!("unexpected authenticate");
                 Ok(())
             }
-            Some(ClientMessage::Hello(port)) => {
+            Some(ClientMessage::Hello(public_key, port)) => {
                 let listener = match self.create_listener(port).await {
                     Ok(listener) => listener,
                     Err(err) => {
@@ -171,31 +166,30 @@ impl Server {
                         let (stream2, addr) = result?;
                         info!(?addr, ?port, "new connection");
 
-                        let id = Uuid::new_v4();
                         let conns = Arc::clone(&self.conns);
 
-                        conns.insert(id, stream2);
+                        conns.insert(public_key, stream2);
                         tokio::spawn(async move {
                             // Remove stale entries to avoid memory leaks.
                             sleep(Duration::from_secs(10)).await;
-                            if conns.remove(&id).is_some() {
-                                warn!(%id, "removed stale connection");
+                            if conns.remove(&public_key).is_some() {
+                                warn!(%public_key, "removed stale connection");
                             }
                         });
-                        stream.send(ServerMessage::Connection(id)).await?;
+                        stream.send(ServerMessage::Connection(public_key)).await?;
                     }
                 }
             }
-            Some(ClientMessage::Accept(id)) => {
-                info!(%id, "forwarding connection");
-                match self.conns.remove(&id) {
+            Some(ClientMessage::Accept(public_key)) => {
+                info!(%public_key, "forwarding connection");
+                match self.conns.remove(&public_key) {
                     Some((_, mut stream2)) => {
                         let mut parts = stream.into_parts();
                         debug_assert!(parts.write_buf.is_empty(), "framed write buffer not empty");
                         stream2.write_all(&parts.read_buf).await?;
                         tokio::io::copy_bidirectional(&mut parts.io, &mut stream2).await?;
                     }
-                    None => warn!(%id, "missing connection"),
+                    None => warn!(%public_key, "missing connection"),
                 }
                 Ok(())
             }

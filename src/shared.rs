@@ -1,9 +1,11 @@
 //! Shared data structures, utilities, and protocol definitions.
 
+use std::fmt::{self, Display};
 use std::time::Duration;
 
-use anyhow::{Context, Result};
-use ed25519_dalek::SigningKey;
+use anyhow::{anyhow, Context, Result};
+use ed25519_dalek::pkcs8::DecodePublicKey;
+use ed25519_dalek::{SigningKey, VerifyingKey};
 use futures_util::{SinkExt, StreamExt};
 use rand::rngs::OsRng;
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
@@ -11,7 +13,6 @@ use tokio::io::{AsyncRead, AsyncWrite};
 use tokio::time::timeout;
 use tokio_util::codec::{AnyDelimiterCodec, Framed, FramedParts};
 use tracing::trace;
-use uuid::Uuid;
 
 /// Maximum byte length for a JSON frame in the stream.
 pub const MAX_FRAME_LENGTH: usize = 512;
@@ -19,22 +20,39 @@ pub const MAX_FRAME_LENGTH: usize = 512;
 /// Timeout for network connections and initial protocol messages.
 pub const NETWORK_TIMEOUT: Duration = Duration::from_secs(3);
 
+/// Wrapper for the DER-encoded bytes of a Ed25519 public key.
+#[derive(Copy, Clone, Debug, Serialize, Deserialize, PartialEq, Eq, Hash)]
+pub struct PeerKey(pub [u8; 32]);
+
+impl PeerKey {
+    /// Build a `VerifyingKey` instance from this instance.
+    pub fn to_verifying_key(&self) -> Result<VerifyingKey, anyhow::Error> {
+        VerifyingKey::from_public_key_der(&self.0).map_err(|e| anyhow!(e))
+    }
+}
+
+impl Display for PeerKey {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}", hex::encode(&self.0))
+    }
+}
+
 /// A message from the client on the control connection.
 #[derive(Debug, Serialize, Deserialize)]
 pub enum ClientMessage {
     /// Response to an authentication challenge from the server.
     Authenticate {
         /// The client's public key; known by the server
-        public_key: Vec<u8>,
+        public_key: PeerKey,
         /// The server's challenge, signed by the client's signing key
         signature: String,
     },
 
     /// Initial client message specifying a port to forward.
-    Hello(u16),
+    Hello(PeerKey, u16),
 
     /// Accepts an incoming TCP connection, using this stream as a proxy.
-    Accept(Uuid),
+    Accept(PeerKey),
 }
 
 /// A message from the server on the control connection.
@@ -50,7 +68,7 @@ pub enum ServerMessage {
     Heartbeat,
 
     /// Asks the client to accept a forwarded TCP connection.
-    Connection(Uuid),
+    Connection(PeerKey),
 
     /// Indicates a server error that terminates the connection.
     Error(String),

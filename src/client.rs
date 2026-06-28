@@ -6,30 +6,26 @@ use anyhow::{bail, Context, Result};
 use ed25519_dalek::SigningKey;
 use tokio::{io::AsyncWriteExt, net::TcpStream, time::timeout};
 use tracing::{error, info, info_span, warn, Instrument};
-use uuid::Uuid;
 
 use crate::auth::ClientAuthenticator;
-use crate::shared::{ClientMessage, Delimited, ServerMessage, NETWORK_TIMEOUT};
+use crate::shared::{ClientMessage, Delimited, PeerKey, ServerMessage, NETWORK_TIMEOUT};
 
 /// Proxy that performs the bi-directional streaming between server and client
 struct Proxy {
     to: String,
     local_host: String,
     local_port: u16,
-    auth: Option<ClientAuthenticator>,
+    auth: ClientAuthenticator,
     control_port: u16,
 }
 
 impl Proxy {
-    async fn handle_connection(&self, id: Uuid) -> Result<()> {
+    async fn handle_connection(&self, peer_key: PeerKey) -> Result<()> {
         let mut remote_conn =
             Delimited::new(connect_with_timeout(&self.to[..], self.control_port).await?);
 
-        if let Some(auth) = &self.auth {
-            auth.client_handshake(&mut remote_conn).await?;
-        }
-
-        remote_conn.send(ClientMessage::Accept(id)).await?;
+        self.auth.client_handshake(&mut remote_conn).await?;
+        remote_conn.send(ClientMessage::Accept(peer_key)).await?;
         let mut local_conn = connect_with_timeout(&self.local_host, self.local_port).await?;
 
         let mut parts = remote_conn.into_parts();
@@ -43,6 +39,7 @@ impl Proxy {
 
 /// State structure for the client.
 pub struct Client {
+    public_key: PeerKey,
     /// Proxy to handle remote connections.
     proxy: Arc<Proxy>,
 }
@@ -54,10 +51,12 @@ impl Client {
         local_port: u16,
         to: &str,
         control_port: u16,
-        signing_key: Option<SigningKey>,
+        signing_key: SigningKey,
     ) -> Self {
-        let auth = signing_key.map(ClientAuthenticator::new);
+        let public_key = PeerKey(*signing_key.verifying_key().as_bytes());
+        let auth = ClientAuthenticator::new(signing_key);
         Client {
+            public_key,
             proxy: Arc::new(Proxy {
                 to: to.to_string(),
                 local_host: local_host.to_string(),
@@ -73,12 +72,9 @@ impl Client {
         let mut stream =
             Delimited::new(connect_with_timeout(&self.proxy.to, self.proxy.control_port).await?);
 
-        if let Some(auth) = &self.proxy.auth {
-            auth.client_handshake(&mut stream).await?;
-        }
-
+        self.proxy.auth.client_handshake(&mut stream).await?;
         stream
-            .send(ClientMessage::Hello(self.proxy.local_port))
+            .send(ClientMessage::Hello(self.public_key, self.proxy.local_port))
             .await?;
         let remote_port = match stream.recv_timeout().await? {
             Some(ServerMessage::Hello(remote_port)) => remote_port,

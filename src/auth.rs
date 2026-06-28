@@ -6,12 +6,12 @@ use std::{
 };
 
 use anyhow::{bail, ensure, Result};
-use ed25519_dalek::pkcs8::{DecodePublicKey, EncodePublicKey};
+use ed25519_dalek::pkcs8::EncodePublicKey;
 use ed25519_dalek::{Signature, Signer, SigningKey, VerifyingKey};
 use rand::{rngs::OsRng, RngCore};
 use tokio::io::{AsyncRead, AsyncWrite};
 
-use crate::shared::{ClientMessage, Delimited, ServerMessage};
+use crate::shared::{ClientMessage, Delimited, PeerKey, ServerMessage};
 
 const DOMAIN: &[u8] = b"P2P_RELAY_V1_CHALLENGE";
 
@@ -60,11 +60,12 @@ impl ClientAuthenticator {
             .signing_key
             .verifying_key()
             .to_public_key_der()?
-            .to_vec();
+            .as_bytes()
+            .try_into()?;
         let signature = self.answer(&challenge);
         stream
             .send(ClientMessage::Authenticate {
-                public_key,
+                public_key: PeerKey(public_key),
                 signature,
             })
             .await?;
@@ -126,7 +127,7 @@ impl ServerAuthenticator {
                 signature,
             }) => {
                 tracing::debug!("Received answer: {:?} {}", &public_key, &signature);
-                let verifying_key = VerifyingKey::from_public_key_der(&public_key)?;
+                let verifying_key = public_key.to_verifying_key()?;
                 self.validate(&verifying_key, &challenge, &signature, timestamp)?;
                 Ok(())
             }
