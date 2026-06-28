@@ -19,8 +19,8 @@ pub struct Server {
     /// Range of TCP ports that can be forwarded.
     port_range: RangeInclusive<u16>,
 
-    /// Optional authenticator used to authenticate clients.
-    auth: Option<ServerAuthenticator>,
+    /// Authenticator used to authenticate clients.
+    auth: ServerAuthenticator,
 
     /// Concurrent map of IDs to incoming connections.
     conns: Arc<DashMap<PeerKey, TcpStream>>,
@@ -39,13 +39,13 @@ impl Server {
     pub fn new(
         control_port: u16,
         peer_port_range: RangeInclusive<u16>,
-        allowed_clients: Option<Vec<VerifyingKey>>,
+        allowed_clients: Vec<VerifyingKey>,
     ) -> Self {
-        assert!(peer_port_range.len() > 1, "Must provide at least two ports");
+        assert!(peer_port_range.len() > 0, "Must provide at least one port");
         Server {
             port_range: peer_port_range,
             conns: Arc::new(DashMap::new()),
-            auth: allowed_clients.map(ServerAuthenticator::new),
+            auth: ServerAuthenticator::new(allowed_clients),
             bind_addr: IpAddr::V4(Ipv4Addr::UNSPECIFIED),
             bind_tunnels: IpAddr::V4(Ipv4Addr::UNSPECIFIED),
             control_port,
@@ -127,12 +127,10 @@ impl Server {
 
     async fn handle_connection(&self, stream: TcpStream) -> Result<()> {
         let mut stream = Delimited::new(stream);
-        if let Some(auth) = &self.auth {
-            if let Err(err) = auth.server_handshake(&mut stream).await {
-                warn!(%err, "server handshake failed");
-                stream.send(ServerMessage::Error(err.to_string())).await?;
-                return Ok(());
-            }
+        if let Err(err) = self.auth.server_handshake(&mut stream).await {
+            warn!(%err, "server handshake failed");
+            stream.send(ServerMessage::Error(err.to_string())).await?;
+            return Ok(());
         }
 
         match stream.recv_timeout().await? {

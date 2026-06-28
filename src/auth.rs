@@ -6,7 +6,6 @@ use std::{
 };
 
 use anyhow::{bail, ensure, Result};
-use ed25519_dalek::pkcs8::EncodePublicKey;
 use ed25519_dalek::{Signature, Signer, SigningKey, VerifyingKey};
 use rand::{rngs::OsRng, RngCore};
 use tokio::io::{AsyncRead, AsyncWrite};
@@ -56,16 +55,11 @@ impl ClientAuthenticator {
             Some(ServerMessage::Challenge(challenge)) => challenge,
             _ => bail!("expected authentication challenge, but no challenge was sent"),
         };
-        let public_key = self
-            .signing_key
-            .verifying_key()
-            .to_public_key_der()?
-            .as_bytes()
-            .try_into()?;
+        let public_key = PeerKey::from_signing_key(&self.signing_key)?;
         let signature = self.answer(&challenge);
         stream
             .send(ClientMessage::Authenticate {
-                public_key: PeerKey(public_key),
+                public_key,
                 signature,
             })
             .await?;

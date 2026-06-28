@@ -4,11 +4,11 @@ use std::fmt::{self, Display};
 use std::time::Duration;
 
 use anyhow::{anyhow, Context, Result};
-use ed25519_dalek::pkcs8::DecodePublicKey;
+use ed25519_dalek::pkcs8::{DecodePublicKey, EncodePublicKey};
 use ed25519_dalek::{SigningKey, VerifyingKey};
 use futures_util::{SinkExt, StreamExt};
 use rand::rngs::OsRng;
-use serde::{de::DeserializeOwned, Deserialize, Serialize};
+use serde::{de::DeserializeOwned, Deserialize, Deserializer, Serialize, Serializer};
 use tokio::io::{AsyncRead, AsyncWrite};
 use tokio::time::timeout;
 use tokio_util::codec::{AnyDelimiterCodec, Framed, FramedParts};
@@ -21,13 +21,59 @@ pub const MAX_FRAME_LENGTH: usize = 512;
 pub const NETWORK_TIMEOUT: Duration = Duration::from_secs(3);
 
 /// Wrapper for the DER-encoded bytes of a Ed25519 public key.
-#[derive(Copy, Clone, Debug, Serialize, Deserialize, PartialEq, Eq, Hash)]
-pub struct PeerKey(pub [u8; 32]);
+#[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
+pub struct PeerKey(pub [u8; 44]);
+
+impl Serialize for PeerKey {
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        use serde::ser::SerializeTuple;
+        let mut seq = serializer.serialize_tuple(44)?;
+        for byte in &self.0 {
+            seq.serialize_element(byte)?;
+        }
+        seq.end()
+    }
+}
+
+impl<'de> Deserialize<'de> for PeerKey {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        struct Visitor;
+        impl<'de> serde::de::Visitor<'de> for Visitor {
+            type Value = PeerKey;
+            fn expecting(&self, f: &mut fmt::Formatter) -> fmt::Result {
+                f.write_str("a 44-byte array")
+            }
+            fn visit_seq<A: serde::de::SeqAccess<'de>>(
+                self,
+                mut seq: A,
+            ) -> Result<Self::Value, A::Error> {
+                let mut arr = [0u8; 44];
+                for (i, byte) in arr.iter_mut().enumerate() {
+                    *byte = seq
+                        .next_element()?
+                        .ok_or_else(|| serde::de::Error::invalid_length(i, &self))?;
+                }
+                Ok(PeerKey(arr))
+            }
+        }
+        deserializer.deserialize_tuple(44, Visitor)
+    }
+}
 
 impl PeerKey {
     /// Build a `VerifyingKey` instance from this instance.
     pub fn to_verifying_key(&self) -> Result<VerifyingKey, anyhow::Error> {
         VerifyingKey::from_public_key_der(&self.0).map_err(|e| anyhow!(e))
+    }
+
+    /// Create a new instance from a `SigningKey`.
+    pub fn from_signing_key<'a>(value: &'a SigningKey) -> Result<Self, anyhow::Error> {
+        let public_key: [u8; 44] = value
+            .verifying_key()
+            .to_public_key_der()?
+            .as_bytes()
+            .try_into()?;
+        Ok(PeerKey(public_key))
     }
 }
 

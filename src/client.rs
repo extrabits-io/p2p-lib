@@ -52,10 +52,10 @@ impl Client {
         to: &str,
         control_port: u16,
         signing_key: SigningKey,
-    ) -> Self {
-        let public_key = PeerKey(*signing_key.verifying_key().as_bytes());
+    ) -> Result<Self, anyhow::Error> {
+        let public_key = PeerKey::from_signing_key(&signing_key)?;
         let auth = ClientAuthenticator::new(signing_key);
-        Client {
+        Ok(Client {
             public_key,
             proxy: Arc::new(Proxy {
                 to: to.to_string(),
@@ -64,7 +64,7 @@ impl Client {
                 control_port,
                 auth,
             }),
-        }
+        })
     }
 
     /// Connect to the server.
