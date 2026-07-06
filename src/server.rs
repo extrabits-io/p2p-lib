@@ -12,7 +12,7 @@ use tokio::time::{sleep, timeout};
 use tracing::{info, info_span, warn, Instrument};
 
 use crate::auth::ServerAuthenticator;
-use crate::shared::{ClientMessage, Delimited, PeerKey, ServerMessage};
+use crate::shared::{ClientMessage, Delimited, PeerInfo, PeerKey, ServerMessage};
 
 /// State structure for the server.
 pub struct Server {
@@ -32,6 +32,9 @@ pub struct Server {
     bind_tunnels: IpAddr,
 
     control_port: u16,
+
+    /// Callback invoked with the `PeerKey` and port whenever a new peer connects.
+    on_peer_connected: Option<Arc<dyn Fn(PeerInfo) + Send + Sync>>,
 }
 
 impl Server {
@@ -49,6 +52,7 @@ impl Server {
             bind_addr: IpAddr::V4(Ipv4Addr::UNSPECIFIED),
             bind_tunnels: IpAddr::V4(Ipv4Addr::UNSPECIFIED),
             control_port,
+            on_peer_connected: None,
         }
     }
 
@@ -60,6 +64,14 @@ impl Server {
     /// Set the IP address where tunnels will listen on.
     pub fn set_bind_tunnels(&mut self, bind_tunnels: IpAddr) {
         self.bind_tunnels = bind_tunnels;
+    }
+
+    /// Set a callback to be invoked with the `PeerKey` and port of each newly connected peer.
+    pub fn set_on_peer_connected<F>(&mut self, callback: F)
+    where
+        F: Fn(PeerInfo) + Send + Sync + 'static,
+    {
+        self.on_peer_connected = Some(Arc::new(callback));
     }
 
     /// Start the server, listening for new connections.
@@ -152,6 +164,9 @@ impl Server {
                 let host = listener.local_addr()?.ip();
                 let port = listener.local_addr()?.port();
                 info!(?host, ?port, "new client");
+                if let Some(callback) = &self.on_peer_connected {
+                    callback((public_key, port));
+                }
                 stream.send(ServerMessage::Hello(port)).await?;
 
                 loop {

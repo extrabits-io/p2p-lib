@@ -24,6 +24,9 @@ pub const NETWORK_TIMEOUT: Duration = Duration::from_secs(3);
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
 pub struct PeerKey(pub [u8; 44]);
 
+/// Fields needed to route incoming requests to a unique peer.
+pub type PeerInfo = (PeerKey, u16);
+
 impl Serialize for PeerKey {
     fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
         use serde::ser::SerializeTuple;
