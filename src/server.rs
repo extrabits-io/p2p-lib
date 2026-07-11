@@ -34,6 +34,9 @@ pub struct Server {
 
     /// Callback invoked with the `PeerKey` and port whenever a new peer connects.
     on_peer_connected: Option<Arc<dyn Fn(PeerInfo) + Send + Sync>>,
+
+    /// Callback invoked when a peer disconnects or times out.
+    on_peer_disconnected: Option<Arc<dyn Fn(PeerKey) + Send + Sync>>,
 }
 
 impl Server {
@@ -52,6 +55,7 @@ impl Server {
             bind_tunnels: IpAddr::V4(Ipv4Addr::UNSPECIFIED),
             control_port,
             on_peer_connected: None,
+            on_peer_disconnected: None,
         }
     }
 
@@ -71,6 +75,14 @@ impl Server {
         F: Fn(PeerInfo) + Send + Sync + 'static,
     {
         self.on_peer_connected = Some(Arc::new(callback));
+    }
+
+    /// Set a callback to be invoked with the `PeerKey` of peers that disconnect.
+    pub fn set_on_peer_disconnected<F>(&mut self, callback: F)
+    where
+        F: Fn(PeerKey) + Send + Sync + 'static,
+    {
+        self.on_peer_disconnected = Some(Arc::new(callback));
     }
 
     /// Start the server, listening for new connections.
@@ -171,7 +183,7 @@ impl Server {
                 loop {
                     if stream.send(ServerMessage::Heartbeat).await.is_err() {
                         // Assume that the TCP connection has been dropped.
-                        return Ok(());
+                        break;
                     }
                     const TIMEOUT: Duration = Duration::from_millis(500);
                     if let Ok(result) = timeout(TIMEOUT, listener.accept()).await {
@@ -191,6 +203,12 @@ impl Server {
                         stream.send(ServerMessage::Connection(public_key)).await?;
                     }
                 }
+
+                if let Some(callback) = &self.on_peer_disconnected {
+                    callback(public_key);
+                }
+
+                Ok(())
             }
             Some(ClientMessage::Accept(public_key)) => {
                 info!(%public_key, "forwarding connection");
