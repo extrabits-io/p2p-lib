@@ -24,9 +24,6 @@ pub const NETWORK_TIMEOUT: Duration = Duration::from_secs(3);
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
 pub struct PeerKey(pub [u8; 44]);
 
-/// Fields needed to route incoming requests to a unique peer.
-pub type PeerInfo = (PeerKey, u16);
-
 impl Serialize for PeerKey {
     fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
         use serde::ser::SerializeTuple;
@@ -64,9 +61,13 @@ impl<'de> Deserialize<'de> for PeerKey {
 }
 
 impl PeerKey {
-    /// Build a `VerifyingKey` instance from this instance.
-    pub fn to_verifying_key(&self) -> Result<VerifyingKey, anyhow::Error> {
-        VerifyingKey::from_public_key_der(&self.0).map_err(|e| anyhow!(e))
+    /// Create a new instance from a unknown-length Vec of bytes.
+    pub fn from_bytes(bytes: Vec<u8>) -> Result<Self, anyhow::Error> {
+        let len = bytes.len();
+        let public_key_der: [u8; 44] = bytes
+            .try_into()
+            .map_err(|_| anyhow!("expected a 44-byte public key, got {len} bytes"))?;
+        Ok(PeerKey(public_key_der))
     }
 
     /// Create a new instance from a `SigningKey`.
@@ -78,6 +79,11 @@ impl PeerKey {
             .try_into()?;
         Ok(PeerKey(public_key))
     }
+
+    /// Build a `VerifyingKey` instance from this instance.
+    pub fn to_verifying_key(&self) -> Result<VerifyingKey, anyhow::Error> {
+        VerifyingKey::from_public_key_der(&self.0).map_err(|e| anyhow!(e))
+    }
 }
 
 impl Display for PeerKey {
@@ -85,6 +91,9 @@ impl Display for PeerKey {
         write!(f, "{}", hex::encode(&self.0))
     }
 }
+
+/// Fields needed to route incoming requests to a unique peer.
+pub type PeerInfo = (PeerKey, u16);
 
 /// A message from the client on the control connection.
 #[derive(Debug, Serialize, Deserialize)]

@@ -6,7 +6,7 @@ use std::{
 };
 
 use anyhow::{bail, ensure, Result};
-use ed25519_dalek::{Signature, Signer, SigningKey, VerifyingKey};
+use ed25519_dalek::{Signature, Signer, SigningKey};
 use rand::{rngs::OsRng, RngCore};
 use tokio::io::{AsyncRead, AsyncWrite};
 
@@ -69,25 +69,25 @@ impl ClientAuthenticator {
 
 /// Struct for authenticating clients that have a signing key.
 pub struct ServerAuthenticator {
-    allowed_clients: Vec<VerifyingKey>,
+    allowed_clients: Vec<PeerKey>,
 }
 
 impl ServerAuthenticator {
     /// Instantiate a new ServerAuthenticator
-    pub fn new(allowed_clients: Vec<VerifyingKey>) -> Self {
+    pub fn new(allowed_clients: Vec<PeerKey>) -> Self {
         Self { allowed_clients }
     }
 
     /// Validate a reply to a challenge.
     pub fn validate(
         &self,
-        verifying_key: &VerifyingKey,
+        peer_key: &PeerKey,
         challenge: &[u8],
         signature_str: &str,
         timestamp: u64,
     ) -> Result<()> {
         ensure!(
-            self.allowed_clients.contains(verifying_key),
+            self.allowed_clients.contains(peer_key),
             "Invalid client key"
         );
         let now = SystemTime::now()
@@ -99,6 +99,7 @@ impl ServerAuthenticator {
             "Challenge has expired"
         );
         let signature = Signature::from_str(signature_str)?;
+        let verifying_key = peer_key.to_verifying_key()?;
         // use verify_strict to mitigate weak key attacks
         // https://docs.rs/ed25519-dalek/latest/ed25519_dalek/struct.VerifyingKey.html#strict-verification
         verifying_key.verify_strict(challenge, &signature)?;
@@ -121,8 +122,7 @@ impl ServerAuthenticator {
                 signature,
             }) => {
                 tracing::debug!("Received answer: {:?} {}", &public_key, &signature);
-                let verifying_key = public_key.to_verifying_key()?;
-                self.validate(&verifying_key, &challenge, &signature, timestamp)?;
+                self.validate(&public_key, &challenge, &signature, timestamp)?;
                 Ok(())
             }
             _ => bail!("server requires authentication, but challenge was not answered"),

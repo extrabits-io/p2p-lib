@@ -5,7 +5,6 @@ use std::{io, ops::RangeInclusive, sync::Arc, time::Duration};
 
 use anyhow::Result;
 use dashmap::DashMap;
-use ed25519_dalek::VerifyingKey;
 use tokio::io::AsyncWriteExt;
 use tokio::net::{TcpListener, TcpStream};
 use tokio::time::{sleep, timeout};
@@ -42,7 +41,7 @@ impl Server {
     pub fn new(
         control_port: u16,
         peer_port_range: RangeInclusive<u16>,
-        allowed_clients: Vec<VerifyingKey>,
+        allowed_clients: Vec<PeerKey>,
     ) -> Self {
         assert!(peer_port_range.len() > 0, "Must provide at least one port");
         Server {

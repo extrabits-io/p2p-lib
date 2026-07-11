@@ -2,9 +2,9 @@ use std::net::SocketAddr;
 use std::time::Duration;
 
 use anyhow::{anyhow, Result};
-use ed25519_dalek::{SigningKey, VerifyingKey};
+use ed25519_dalek::SigningKey;
 use lazy_static::lazy_static;
-use p2p_lib::shared::{generate_signing_key, Delimited};
+use p2p_lib::shared::{generate_signing_key, Delimited, PeerKey};
 use p2p_lib::{client::Client, server::Server};
 use rstest::*;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -18,7 +18,7 @@ lazy_static! {
 }
 
 /// Spawn the server, giving some time for the control port TcpListener to start.
-async fn spawn_server(secret: VerifyingKey) -> Result<(u16, u16)> {
+async fn spawn_server(peer_key: PeerKey) -> Result<(u16, u16)> {
     let listener1 = TcpListener::bind("localhost:0").await?;
     let port1 = listener1.local_addr()?.port();
     let listener2 = TcpListener::bind("localhost:0").await?;
@@ -33,7 +33,7 @@ async fn spawn_server(secret: VerifyingKey) -> Result<(u16, u16)> {
     print!("Control port {control_port}; port range: {:?}", &port_range);
 
     let client_port = port_range.clone().into_iter().next().unwrap();
-    let allowed_clients = vec![secret];
+    let allowed_clients = vec![peer_key];
     let mut server = Server::new(control_port, port_range, allowed_clients);
     server.set_bind_tunnels(std::net::IpAddr::V4(std::net::Ipv4Addr::new(127, 0, 0, 2)));
     tokio::spawn(server.listen());
@@ -67,8 +67,8 @@ async fn basic_proxy() -> Result<()> {
     let _guard = SERIAL_GUARD.lock().await;
 
     let client_key = generate_signing_key();
-    let server_key = client_key.verifying_key();
-    let (control_port, client_port) = spawn_server(server_key).await?;
+    let peer_key = PeerKey::from_signing_key(&client_key)?;
+    let (control_port, client_port) = spawn_server(peer_key).await?;
     let (client, stream, listener, addr) =
         spawn_client(control_port, client_port, client_key).await?;
     tokio::spawn(async move { client.listen(stream).await });
@@ -105,8 +105,8 @@ async fn basic_proxy() -> Result<()> {
 async fn mismatched_secret() -> Result<()> {
     let _guard = SERIAL_GUARD.lock().await;
     let client_key = generate_signing_key();
-    let server_key = generate_signing_key().verifying_key();
-    let (control_port, client_port) = spawn_server(server_key).await?;
+    let other_peer_key = PeerKey::from_signing_key(&generate_signing_key())?;
+    let (control_port, client_port) = spawn_server(other_peer_key).await?;
     assert!(spawn_client(control_port, client_port, client_key)
         .await
         .is_err());
@@ -136,8 +136,8 @@ async fn invalid_address() -> Result<()> {
 async fn very_long_frame() -> Result<()> {
     let _guard = SERIAL_GUARD.lock().await;
 
-    let server_key = generate_signing_key().verifying_key();
-    let (control_port, _) = spawn_server(server_key).await?;
+    let peer_key = PeerKey::from_signing_key(&generate_signing_key())?;
+    let (control_port, _) = spawn_server(peer_key).await?;
     let mut attacker = TcpStream::connect(("localhost", control_port)).await?;
 
     // Slowly send a very long frame.
@@ -165,8 +165,8 @@ async fn half_closed_tcp_stream() -> Result<()> {
     let _guard = SERIAL_GUARD.lock().await;
 
     let client_key = generate_signing_key();
-    let server_key = client_key.verifying_key();
-    let (control_port, client_port) = spawn_server(server_key).await?;
+    let peer_key = PeerKey::from_signing_key(&client_key)?;
+    let (control_port, client_port) = spawn_server(peer_key).await?;
     let (_, _, listener, addr) = spawn_client(control_port, client_port, client_key).await?;
 
     let (mut cli, (mut srv, _)) = tokio::try_join!(TcpStream::connect(addr), listener.accept())?;
