@@ -1,0 +1,9 @@
+**/.git/
+**/.zed/
+**/dist/
+**/node_modules/
+**/gen/
+target/
+.env.local
+*.key
+*.hide
