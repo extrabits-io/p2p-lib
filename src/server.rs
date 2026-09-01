@@ -3,7 +3,7 @@
 use std::net::{IpAddr, Ipv4Addr};
 use std::{io, ops::RangeInclusive, sync::Arc, time::Duration};
 
-use anyhow::Result;
+use anyhow::{ensure, Result};
 use dashmap::DashMap;
 use tokio::io::AsyncWriteExt;
 use tokio::net::{TcpListener, TcpStream};
@@ -150,80 +150,87 @@ impl Server {
 
     async fn handle_connection(&self, stream: TcpStream) -> Result<()> {
         let mut stream = Delimited::new(stream);
-        if let Err(err) = self.auth.server_handshake(&mut stream).await {
-            warn!(%err, "server handshake failed");
-            stream.send(ServerMessage::Error(err.to_string())).await?;
-            return Ok(());
-        }
-
-        match stream.recv_timeout().await? {
-            Some(ClientMessage::Authenticate {
-                public_key: _,
-                signature: _,
-            }) => {
-                warn!("unexpected authenticate");
-                Ok(())
-            }
-            Some(ClientMessage::Hello(public_key, port)) => {
-                let listener = match self.create_listener(port).await {
-                    Ok(listener) => listener,
-                    Err(err) => {
-                        stream.send(ServerMessage::Error(err.into())).await?;
-                        return Ok(());
+        match self.auth.server_handshake(&mut stream).await {
+            Ok(public_key) => {
+                match stream.recv_timeout().await? {
+                    Some(ClientMessage::Authenticate {
+                        public_key: _,
+                        signature: _,
+                    }) => {
+                        warn!("unexpected authenticate");
+                        Ok(())
                     }
-                };
-                let host = listener.local_addr()?.ip();
-                let port = listener.local_addr()?.port();
-                info!(?host, ?port, "new client");
-                if let Some(callback) = &self.on_peer_connected {
-                    callback((public_key, port));
-                }
-                stream.send(ServerMessage::Hello(port)).await?;
-
-                loop {
-                    if stream.send(ServerMessage::Heartbeat).await.is_err() {
-                        // Assume that the TCP connection has been dropped.
-                        break;
-                    }
-                    const TIMEOUT: Duration = Duration::from_millis(500);
-                    if let Ok(result) = timeout(TIMEOUT, listener.accept()).await {
-                        let (stream2, addr) = result?;
-                        info!(?addr, ?port, "new connection");
-
-                        let conns = Arc::clone(&self.conns);
-
-                        conns.insert(public_key, stream2);
-                        tokio::spawn(async move {
-                            // Remove stale entries to avoid memory leaks.
-                            sleep(Duration::from_secs(10)).await;
-                            if conns.remove(&public_key).is_some() {
-                                warn!(%public_key, "removed stale connection");
+                    Some(ClientMessage::Hello(unknown_public_key, port)) => {
+                        ensure!(public_key == unknown_public_key, "Invalid public key");
+                        let listener = match self.create_listener(port).await {
+                            Ok(listener) => listener,
+                            Err(err) => {
+                                stream.send(ServerMessage::Error(err.into())).await?;
+                                return Ok(());
                             }
-                        });
-                        stream.send(ServerMessage::Connection(public_key)).await?;
-                    }
-                }
+                        };
+                        let host = listener.local_addr()?.ip();
+                        let port = listener.local_addr()?.port();
+                        info!(?host, ?port, "new client");
+                        if let Some(callback) = &self.on_peer_connected {
+                            callback((public_key, port));
+                        }
+                        stream.send(ServerMessage::Hello(port)).await?;
 
-                if let Some(callback) = &self.on_peer_disconnected {
-                    callback(public_key);
-                }
+                        loop {
+                            if stream.send(ServerMessage::Heartbeat).await.is_err() {
+                                // Assume that the TCP connection has been dropped.
+                                break;
+                            }
+                            const TIMEOUT: Duration = Duration::from_millis(500);
+                            if let Ok(result) = timeout(TIMEOUT, listener.accept()).await {
+                                let (stream2, addr) = result?;
+                                info!(?addr, ?port, "new connection");
 
-                Ok(())
-            }
-            Some(ClientMessage::Accept(public_key)) => {
-                info!(%public_key, "forwarding connection");
-                match self.conns.remove(&public_key) {
-                    Some((_, mut stream2)) => {
-                        let mut parts = stream.into_parts();
-                        debug_assert!(parts.write_buf.is_empty(), "framed write buffer not empty");
-                        stream2.write_all(&parts.read_buf).await?;
-                        tokio::io::copy_bidirectional(&mut parts.io, &mut stream2).await?;
+                                let conns = Arc::clone(&self.conns);
+
+                                conns.insert(public_key, stream2);
+                                tokio::spawn(async move {
+                                    // Remove stale entries to avoid memory leaks.
+                                    sleep(Duration::from_secs(10)).await;
+                                    if conns.remove(&public_key).is_some() {
+                                        warn!(%public_key, "removed stale connection");
+                                    }
+                                });
+                                stream.send(ServerMessage::Connection(public_key)).await?;
+                            }
+                        }
+
+                        if let Some(callback) = &self.on_peer_disconnected {
+                            callback(public_key);
+                        }
+
+                        Ok(())
                     }
-                    None => warn!(%public_key, "missing connection"),
+                    Some(ClientMessage::Accept(public_key)) => {
+                        info!(%public_key, "forwarding connection");
+                        match self.conns.remove(&public_key) {
+                            Some((_, mut stream2)) => {
+                                let mut parts = stream.into_parts();
+                                debug_assert!(
+                                    parts.write_buf.is_empty(),
+                                    "framed write buffer not empty"
+                                );
+                                stream2.write_all(&parts.read_buf).await?;
+                                tokio::io::copy_bidirectional(&mut parts.io, &mut stream2).await?;
+                            }
+                            None => warn!(%public_key, "missing connection"),
+                        }
+                        Ok(())
+                    }
+                    None => Ok(()),
                 }
-                Ok(())
             }
-            None => Ok(()),
+            Err(err) => {
+                warn!(%err, "server handshake failed");
+                stream.send(ServerMessage::Error(err.to_string())).await?;
+                return Ok(());
+            }
         }
     }
 }

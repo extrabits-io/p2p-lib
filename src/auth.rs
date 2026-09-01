@@ -110,7 +110,7 @@ impl ServerAuthenticator {
     pub async fn server_handshake<T: AsyncRead + AsyncWrite + Unpin>(
         &self,
         stream: &mut Delimited<T>,
-    ) -> Result<()> {
+    ) -> Result<PeerKey> {
         let (challenge, timestamp) = generate_challenge();
         tracing::debug!("Sending challenge: {:?}", &challenge);
         stream
@@ -123,7 +123,7 @@ impl ServerAuthenticator {
             }) => {
                 tracing::debug!("Received answer: {:?} {}", &public_key, &signature);
                 self.validate(&public_key, &challenge, &signature, timestamp)?;
-                Ok(())
+                Ok(public_key)
             }
             _ => bail!("server requires authentication, but challenge was not answered"),
         }
