@@ -13,6 +13,7 @@ use tokio::io::{AsyncRead, AsyncWrite};
 use tokio::time::timeout;
 use tokio_util::codec::{AnyDelimiterCodec, Framed, FramedParts};
 use tracing::trace;
+use uuid::Uuid;
 
 /// Maximum byte length for a JSON frame in the stream.
 pub const MAX_FRAME_LENGTH: usize = 512;
@@ -110,7 +111,7 @@ pub enum ClientMessage {
     Hello(PeerKey, u16),
 
     /// Accepts an incoming TCP connection, using this stream as a proxy.
-    Accept(PeerKey),
+    Accept(PeerKey, Uuid),
 }
 
 /// A message from the server on the control connection.
@@ -126,7 +127,7 @@ pub enum ServerMessage {
     Heartbeat,
 
     /// Asks the client to accept a forwarded TCP connection.
-    Connection(PeerKey),
+    Connection(Uuid),
 
     /// Indicates a server error that terminates the connection.
     Error(String),

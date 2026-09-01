@@ -6,6 +6,7 @@ use anyhow::{bail, Context, Result};
 use ed25519_dalek::SigningKey;
 use tokio::{io::AsyncWriteExt, net::TcpStream, time::timeout};
 use tracing::{error, info, info_span, warn, Instrument};
+use uuid::Uuid;
 
 use crate::auth::ClientAuthenticator;
 use crate::shared::{ClientMessage, Delimited, PeerKey, ServerMessage, NETWORK_TIMEOUT};
@@ -20,12 +21,14 @@ struct Proxy {
 }
 
 impl Proxy {
-    async fn handle_connection(&self, peer_key: PeerKey) -> Result<()> {
+    async fn handle_connection(&self, peer_key: PeerKey, id: Uuid) -> Result<()> {
         let mut remote_conn =
             Delimited::new(connect_with_timeout(&self.to[..], self.control_port).await?);
 
         self.auth.client_handshake(&mut remote_conn).await?;
-        remote_conn.send(ClientMessage::Accept(peer_key)).await?;
+        remote_conn
+            .send(ClientMessage::Accept(peer_key, id))
+            .await?;
         let mut local_conn = connect_with_timeout(&self.local_host, self.local_port).await?;
 
         let mut parts = remote_conn.into_parts();
@@ -102,10 +105,11 @@ impl Client {
                 Some(ServerMessage::Connection(id)) => {
                     // Clone the Arc to move into the spawned task
                     let proxy = Arc::clone(&self.proxy);
+                    let public_key = self.public_key.clone();
                     tokio::spawn(
                         async move {
                             info!("new connection");
-                            match proxy.handle_connection(id).await {
+                            match proxy.handle_connection(public_key, id).await {
                                 Ok(_) => info!("connection exited"),
                                 Err(err) => warn!(%err, "connection exited with error"),
                             }

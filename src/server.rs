@@ -9,6 +9,7 @@ use tokio::io::AsyncWriteExt;
 use tokio::net::{TcpListener, TcpStream};
 use tokio::time::{sleep, timeout};
 use tracing::{info, info_span, warn, Instrument};
+use uuid::Uuid;
 
 use crate::auth::ServerAuthenticator;
 use crate::shared::{ClientMessage, Delimited, PeerInfo, PeerKey, ServerMessage};
@@ -22,7 +23,7 @@ pub struct Server {
     auth: ServerAuthenticator,
 
     /// Concurrent map of IDs to incoming connections.
-    conns: Arc<DashMap<PeerKey, TcpStream>>,
+    conns: Arc<DashMap<Uuid, (PeerKey, TcpStream)>>,
 
     /// IP address where the control server will bind to.
     bind_addr: IpAddr,
@@ -161,7 +162,7 @@ impl Server {
                         Ok(())
                     }
                     Some(ClientMessage::Hello(unknown_public_key, port)) => {
-                        ensure!(public_key == unknown_public_key, "Invalid public key");
+                        ensure!(public_key == unknown_public_key, "invalid public key");
                         let listener = match self.create_listener(port).await {
                             Ok(listener) => listener,
                             Err(err) => {
@@ -187,17 +188,18 @@ impl Server {
                                 let (stream2, addr) = result?;
                                 info!(?addr, ?port, "new connection");
 
+                                let id = Uuid::new_v4();
                                 let conns = Arc::clone(&self.conns);
 
-                                conns.insert(public_key, stream2);
+                                conns.insert(id, (public_key, stream2));
                                 tokio::spawn(async move {
                                     // Remove stale entries to avoid memory leaks.
                                     sleep(Duration::from_secs(10)).await;
-                                    if conns.remove(&public_key).is_some() {
-                                        warn!(%public_key, "removed stale connection");
+                                    if conns.remove(&id).is_some() {
+                                        warn!(%id, "removed stale connection");
                                     }
                                 });
-                                stream.send(ServerMessage::Connection(public_key)).await?;
+                                stream.send(ServerMessage::Connection(id)).await?;
                             }
                         }
 
@@ -207,10 +209,11 @@ impl Server {
 
                         Ok(())
                     }
-                    Some(ClientMessage::Accept(public_key)) => {
+                    Some(ClientMessage::Accept(unknown_public_key, id)) => {
+                        ensure!(unknown_public_key == public_key, "invalid public key");
                         info!(%public_key, "forwarding connection");
-                        match self.conns.remove(&public_key) {
-                            Some((_, mut stream2)) => {
+                        match self.conns.remove(&id) {
+                            Some((_, (_, mut stream2))) => {
                                 let mut parts = stream.into_parts();
                                 debug_assert!(
                                     parts.write_buf.is_empty(),

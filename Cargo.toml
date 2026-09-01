@@ -25,6 +25,7 @@ tokio = { workspace = true, features = ["rt-multi-thread", "io-util", "macros", 
 tokio-util = { version = "0.7.1", features = ["codec"] }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
+uuid = { version = "1.2.1", features = ["serde", "v4"] }
 
 [dev-dependencies]
 lazy_static = "1.4.0"
