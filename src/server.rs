@@ -3,9 +3,8 @@
 use std::net::{IpAddr, Ipv4Addr};
 use std::{io, ops::RangeInclusive, sync::Arc, time::Duration};
 
-use anyhow::Result;
+use anyhow::{ensure, Result};
 use dashmap::DashMap;
-use ed25519_dalek::VerifyingKey;
 use tokio::io::AsyncWriteExt;
 use tokio::net::{TcpListener, TcpStream};
 use tokio::time::{sleep, timeout};
@@ -13,18 +12,18 @@ use tracing::{info, info_span, warn, Instrument};
 use uuid::Uuid;
 
 use crate::auth::ServerAuthenticator;
-use crate::shared::{ClientMessage, Delimited, ServerMessage};
+use crate::shared::{ClientMessage, Delimited, PeerInfo, PeerKey, ServerMessage};
 
 /// State structure for the server.
 pub struct Server {
     /// Range of TCP ports that can be forwarded.
     port_range: RangeInclusive<u16>,
 
-    /// Optional authenticator used to authenticate clients.
-    auth: Option<ServerAuthenticator>,
+    /// Authenticator used to authenticate clients.
+    auth: ServerAuthenticator,
 
     /// Concurrent map of IDs to incoming connections.
-    conns: Arc<DashMap<Uuid, TcpStream>>,
+    conns: Arc<DashMap<Uuid, (PeerKey, TcpStream)>>,
 
     /// IP address where the control server will bind to.
     bind_addr: IpAddr,
@@ -33,27 +32,31 @@ pub struct Server {
     bind_tunnels: IpAddr,
 
     control_port: u16,
+
+    /// Callback invoked with the `PeerKey` and port whenever a new peer connects.
+    on_peer_connected: Option<Arc<dyn Fn(PeerInfo) + Send + Sync>>,
+
+    /// Callback invoked when a peer disconnects or times out.
+    on_peer_disconnected: Option<Arc<dyn Fn(PeerKey) + Send + Sync>>,
 }
 
 impl Server {
     /// Create a new server with a specified minimum port number.
     pub fn new(
-        port_range: RangeInclusive<u16>,
-        allowed_clients: Option<Vec<VerifyingKey>>,
+        control_port: u16,
+        peer_port_range: RangeInclusive<u16>,
+        allowed_clients: Vec<PeerKey>,
     ) -> Self {
-        assert!(port_range.len() > 1, "Must provide at least two ports");
-        let mut rng = port_range;
-        let control_port = match rng.next() {
-            Some(port) => port,
-            None => panic!("Must provide an ascending range of ports"),
-        };
+        assert!(peer_port_range.len() > 0, "Must provide at least one port");
         Server {
-            port_range: rng,
+            port_range: peer_port_range,
             conns: Arc::new(DashMap::new()),
-            auth: allowed_clients.map(ServerAuthenticator::new),
+            auth: ServerAuthenticator::new(allowed_clients),
             bind_addr: IpAddr::V4(Ipv4Addr::UNSPECIFIED),
             bind_tunnels: IpAddr::V4(Ipv4Addr::UNSPECIFIED),
             control_port,
+            on_peer_connected: None,
+            on_peer_disconnected: None,
         }
     }
 
@@ -65,6 +68,22 @@ impl Server {
     /// Set the IP address where tunnels will listen on.
     pub fn set_bind_tunnels(&mut self, bind_tunnels: IpAddr) {
         self.bind_tunnels = bind_tunnels;
+    }
+
+    /// Set a callback to be invoked with the `PeerKey` and port of each newly connected peer.
+    pub fn set_on_peer_connected<F>(&mut self, callback: F)
+    where
+        F: Fn(PeerInfo) + Send + Sync + 'static,
+    {
+        self.on_peer_connected = Some(Arc::new(callback));
+    }
+
+    /// Set a callback to be invoked with the `PeerKey` of peers that disconnect.
+    pub fn set_on_peer_disconnected<F>(&mut self, callback: F)
+    where
+        F: Fn(PeerKey) + Send + Sync + 'static,
+    {
+        self.on_peer_disconnected = Some(Arc::new(callback));
     }
 
     /// Start the server, listening for new connections.
@@ -132,74 +151,89 @@ impl Server {
 
     async fn handle_connection(&self, stream: TcpStream) -> Result<()> {
         let mut stream = Delimited::new(stream);
-        if let Some(auth) = &self.auth {
-            if let Err(err) = auth.server_handshake(&mut stream).await {
+        match self.auth.server_handshake(&mut stream).await {
+            Ok(public_key) => {
+                match stream.recv_timeout().await? {
+                    Some(ClientMessage::Authenticate {
+                        public_key: _,
+                        signature: _,
+                    }) => {
+                        warn!("unexpected authenticate");
+                        Ok(())
+                    }
+                    Some(ClientMessage::Hello(unknown_public_key, port)) => {
+                        ensure!(public_key == unknown_public_key, "invalid public key");
+                        let listener = match self.create_listener(port).await {
+                            Ok(listener) => listener,
+                            Err(err) => {
+                                stream.send(ServerMessage::Error(err.into())).await?;
+                                return Ok(());
+                            }
+                        };
+                        let host = listener.local_addr()?.ip();
+                        let port = listener.local_addr()?.port();
+                        info!(?host, ?port, "new client");
+                        if let Some(callback) = &self.on_peer_connected {
+                            callback((public_key, port));
+                        }
+                        stream.send(ServerMessage::Hello(port)).await?;
+
+                        loop {
+                            if stream.send(ServerMessage::Heartbeat).await.is_err() {
+                                // Assume that the TCP connection has been dropped.
+                                break;
+                            }
+                            const TIMEOUT: Duration = Duration::from_millis(500);
+                            if let Ok(result) = timeout(TIMEOUT, listener.accept()).await {
+                                let (stream2, addr) = result?;
+                                info!(?addr, ?port, "new connection");
+
+                                let id = Uuid::new_v4();
+                                let conns = Arc::clone(&self.conns);
+
+                                conns.insert(id, (public_key, stream2));
+                                tokio::spawn(async move {
+                                    // Remove stale entries to avoid memory leaks.
+                                    sleep(Duration::from_secs(10)).await;
+                                    if conns.remove(&id).is_some() {
+                                        warn!(%id, "removed stale connection");
+                                    }
+                                });
+                                stream.send(ServerMessage::Connection(id)).await?;
+                            }
+                        }
+
+                        if let Some(callback) = &self.on_peer_disconnected {
+                            callback(public_key);
+                        }
+
+                        Ok(())
+                    }
+                    Some(ClientMessage::Accept(unknown_public_key, id)) => {
+                        ensure!(unknown_public_key == public_key, "invalid public key");
+                        info!(%public_key, "forwarding connection");
+                        match self.conns.remove(&id) {
+                            Some((_, (_, mut stream2))) => {
+                                let mut parts = stream.into_parts();
+                                debug_assert!(
+                                    parts.write_buf.is_empty(),
+                                    "framed write buffer not empty"
+                                );
+                                stream2.write_all(&parts.read_buf).await?;
+                                tokio::io::copy_bidirectional(&mut parts.io, &mut stream2).await?;
+                            }
+                            None => warn!(%public_key, "missing connection"),
+                        }
+                        Ok(())
+                    }
+                    None => Ok(()),
+                }
+            }
+            Err(err) => {
                 warn!(%err, "server handshake failed");
                 stream.send(ServerMessage::Error(err.to_string())).await?;
                 return Ok(());
             }
-        }
-
-        match stream.recv_timeout().await? {
-            Some(ClientMessage::Authenticate {
-                public_key: _,
-                signature: _,
-            }) => {
-                warn!("unexpected authenticate");
-                Ok(())
-            }
-            Some(ClientMessage::Hello(port)) => {
-                let listener = match self.create_listener(port).await {
-                    Ok(listener) => listener,
-                    Err(err) => {
-                        stream.send(ServerMessage::Error(err.into())).await?;
-                        return Ok(());
-                    }
-                };
-                let host = listener.local_addr()?.ip();
-                let port = listener.local_addr()?.port();
-                info!(?host, ?port, "new client");
-                stream.send(ServerMessage::Hello(port)).await?;
-
-                loop {
-                    if stream.send(ServerMessage::Heartbeat).await.is_err() {
-                        // Assume that the TCP connection has been dropped.
-                        return Ok(());
-                    }
-                    const TIMEOUT: Duration = Duration::from_millis(500);
-                    if let Ok(result) = timeout(TIMEOUT, listener.accept()).await {
-                        let (stream2, addr) = result?;
-                        info!(?addr, ?port, "new connection");
-
-                        let id = Uuid::new_v4();
-                        let conns = Arc::clone(&self.conns);
-
-                        conns.insert(id, stream2);
-                        tokio::spawn(async move {
-                            // Remove stale entries to avoid memory leaks.
-                            sleep(Duration::from_secs(10)).await;
-                            if conns.remove(&id).is_some() {
-                                warn!(%id, "removed stale connection");
-                            }
-                        });
-                        stream.send(ServerMessage::Connection(id)).await?;
-                    }
-                }
-            }
-            Some(ClientMessage::Accept(id)) => {
-                info!(%id, "forwarding connection");
-                match self.conns.remove(&id) {
-                    Some((_, mut stream2)) => {
-                        let mut parts = stream.into_parts();
-                        debug_assert!(parts.write_buf.is_empty(), "framed write buffer not empty");
-                        stream2.write_all(&parts.read_buf).await?;
-                        tokio::io::copy_bidirectional(&mut parts.io, &mut stream2).await?;
-                    }
-                    None => warn!(%id, "missing connection"),
-                }
-                Ok(())
-            }
-            None => Ok(()),
         }
     }
 }

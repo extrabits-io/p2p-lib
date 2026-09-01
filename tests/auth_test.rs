@@ -1,14 +1,14 @@
 use anyhow::Result;
 use p2p_lib::{
     auth::{ClientAuthenticator, ServerAuthenticator},
-    shared::{generate_signing_key, Delimited},
+    shared::{generate_signing_key, Delimited, PeerKey},
 };
 use tokio::io::{self};
 
 #[tokio::test]
 async fn auth_handshake() -> Result<()> {
     let key = generate_signing_key();
-    let server_auth = ServerAuthenticator::new(vec![key.verifying_key()]);
+    let server_auth = ServerAuthenticator::new(vec![PeerKey::from_signing_key(&key)?]);
     let client_auth = ClientAuthenticator::new(key);
 
     let (client, server) = io::duplex(8); // Ensure correctness with limited capacity.
@@ -24,11 +24,11 @@ async fn auth_handshake() -> Result<()> {
 }
 
 #[tokio::test]
-async fn auth_handshake_fail() {
+async fn auth_handshake_fail() -> Result<()> {
     let key1 = generate_signing_key();
     let key2 = generate_signing_key();
     let client_auth = ClientAuthenticator::new(key1);
-    let server_auth = ServerAuthenticator::new(vec![key2.verifying_key()]);
+    let server_auth = ServerAuthenticator::new(vec![PeerKey::from_signing_key(&key2)?]);
 
     let (client, server) = io::duplex(8); // Ensure correctness with limited capacity.
     let mut client = Delimited::new(client);
@@ -39,4 +39,6 @@ async fn auth_handshake_fail() {
         server_auth.server_handshake(&mut server),
     );
     assert!(result.is_err());
+
+    Ok(())
 }

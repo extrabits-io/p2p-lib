@@ -7,7 +7,7 @@ REPO_ROOT="$(git rev-parse --show-toplevel)"
 WORKSPACE_ROOT="$(dirname "$REPO_ROOT")"
 DEST="$REPO_ROOT/workspace"
 
-for file in Cargo.toml Cargo.lock; do
+for file in Cargo.toml Cargo.lock Dockerfile .dockerignore; do
     src="$WORKSPACE_ROOT/$file"
     dst="$DEST/$file"
     if [[ -f "$src" ]]; then

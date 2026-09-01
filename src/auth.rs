@@ -6,12 +6,11 @@ use std::{
 };
 
 use anyhow::{bail, ensure, Result};
-use ed25519_dalek::pkcs8::{DecodePublicKey, EncodePublicKey};
-use ed25519_dalek::{Signature, Signer, SigningKey, VerifyingKey};
+use ed25519_dalek::{Signature, Signer, SigningKey};
 use rand::{rngs::OsRng, RngCore};
 use tokio::io::{AsyncRead, AsyncWrite};
 
-use crate::shared::{ClientMessage, Delimited, ServerMessage};
+use crate::shared::{ClientMessage, Delimited, PeerKey, ServerMessage};
 
 const DOMAIN: &[u8] = b"P2P_RELAY_V1_CHALLENGE";
 
@@ -56,11 +55,7 @@ impl ClientAuthenticator {
             Some(ServerMessage::Challenge(challenge)) => challenge,
             _ => bail!("expected authentication challenge, but no challenge was sent"),
         };
-        let public_key = self
-            .signing_key
-            .verifying_key()
-            .to_public_key_der()?
-            .to_vec();
+        let public_key = PeerKey::from_signing_key(&self.signing_key)?;
         let signature = self.answer(&challenge);
         stream
             .send(ClientMessage::Authenticate {
@@ -74,25 +69,25 @@ impl ClientAuthenticator {
 
 /// Struct for authenticating clients that have a signing key.
 pub struct ServerAuthenticator {
-    allowed_clients: Vec<VerifyingKey>,
+    allowed_clients: Vec<PeerKey>,
 }
 
 impl ServerAuthenticator {
     /// Instantiate a new ServerAuthenticator
-    pub fn new(allowed_clients: Vec<VerifyingKey>) -> Self {
+    pub fn new(allowed_clients: Vec<PeerKey>) -> Self {
         Self { allowed_clients }
     }
 
     /// Validate a reply to a challenge.
     pub fn validate(
         &self,
-        verifying_key: &VerifyingKey,
+        peer_key: &PeerKey,
         challenge: &[u8],
         signature_str: &str,
         timestamp: u64,
     ) -> Result<()> {
         ensure!(
-            self.allowed_clients.contains(verifying_key),
+            self.allowed_clients.contains(peer_key),
             "Invalid client key"
         );
         let now = SystemTime::now()
@@ -104,6 +99,7 @@ impl ServerAuthenticator {
             "Challenge has expired"
         );
         let signature = Signature::from_str(signature_str)?;
+        let verifying_key = peer_key.to_verifying_key()?;
         // use verify_strict to mitigate weak key attacks
         // https://docs.rs/ed25519-dalek/latest/ed25519_dalek/struct.VerifyingKey.html#strict-verification
         verifying_key.verify_strict(challenge, &signature)?;
@@ -114,7 +110,7 @@ impl ServerAuthenticator {
     pub async fn server_handshake<T: AsyncRead + AsyncWrite + Unpin>(
         &self,
         stream: &mut Delimited<T>,
-    ) -> Result<()> {
+    ) -> Result<PeerKey> {
         let (challenge, timestamp) = generate_challenge();
         tracing::debug!("Sending challenge: {:?}", &challenge);
         stream
@@ -126,9 +122,8 @@ impl ServerAuthenticator {
                 signature,
             }) => {
                 tracing::debug!("Received answer: {:?} {}", &public_key, &signature);
-                let verifying_key = VerifyingKey::from_public_key_der(&public_key)?;
-                self.validate(&verifying_key, &challenge, &signature, timestamp)?;
-                Ok(())
+                self.validate(&public_key, &challenge, &signature, timestamp)?;
+                Ok(public_key)
             }
             _ => bail!("server requires authentication, but challenge was not answered"),
         }
